@@ -29,10 +29,13 @@ export const projects = pgTable("projects", {
 
 export const users = pgTable("users", {
   id: text("id").primaryKey(),
-  email: text("email").notNull().unique(),
+  /** Null only for Clerk accounts without an email (e.g. phone sign-in). */
+  email: text("email").unique(),
   name: text("name"),
-  /** scrypt: "<salt hex>:<hash hex>". */
-  passwordHash: text("password_hash").notNull(),
+  /** scrypt: "<salt hex>:<hash hex>". Null for Clerk accounts. */
+  passwordHash: text("password_hash"),
+  /** Clerk user id when Clerk handles sign-in. */
+  clerkId: text("clerk_id").unique(),
   createdAt: createdAt(),
 });
 

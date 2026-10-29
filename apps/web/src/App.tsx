@@ -1,7 +1,10 @@
+import { UserButton } from "@clerk/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 import { NavLink, Navigate, Route, Routes } from "react-router";
-import { type Me, api, useLiveUpdates } from "./api";
-import { SignIn } from "./pages/SignIn";
+import { api, useLiveUpdates } from "./api";
+import { ClerkGate } from "./auth";
+import { PasswordSignIn, Splash, Unreachable } from "./pages/SignIn";
 import { Arena, ExperimentPage, NewExperiment } from "./pages/Arena";
 import { Connect } from "./pages/Connect";
 import { Inbox, isRecurring } from "./pages/Inbox";
@@ -34,17 +37,35 @@ function Tab({ to, children, badge }: { to: string; children: string; badge?: nu
   );
 }
 
-/** Hosted Lucid asks who you are first; local Lucid goes straight in. */
+/**
+ * Hosted Lucid asks who you are first (Clerk, or built-in email + password);
+ * local Lucid goes straight in.
+ */
 export function App() {
+  const config = useQuery({ queryKey: ["auth-config"], queryFn: api.auth.config, staleTime: Number.POSITIVE_INFINITY, retry: 2 });
+  if (config.isPending) return <Splash />;
+  if (config.isError) return <Unreachable onRetry={() => void config.refetch()} />;
+  const { provider, publishableKey, signups } = config.data;
+  if (provider === "clerk" && publishableKey) {
+    return (
+      <ClerkGate publishableKey={publishableKey} signups={signups}>
+        {() => <Shell account={<UserButton />} />}
+      </ClerkGate>
+    );
+  }
+  return <BuiltInGate />;
+}
+
+function BuiltInGate() {
   const me = useQuery({ queryKey: ["me"], queryFn: api.auth.me, staleTime: 60_000 });
-  if (me.isPending) return null;
-  if (me.data?.mode === "hosted" && !me.data.user) return <SignIn signups={me.data.signups !== false} />;
-  return <Shell me={me.data} />;
+  if (me.isPending) return <Splash />;
+  if (me.data?.mode === "hosted" && !me.data.user) return <PasswordSignIn signups={me.data.signups !== false} />;
+  return <Shell account={me.data?.mode === "hosted" && me.data.user ? <AccountMenu email={me.data.user.email ?? ""} /> : null} />;
 }
 
 function AccountMenu({ email }: { email: string }) {
   const queryClient = useQueryClient();
-  const logout = useMutation({ mutationFn: api.auth.logout, onSuccess: () => queryClient.clear() });
+  const logout = useMutation({ mutationFn: api.auth.logout, onSuccess: () => queryClient.removeQueries({ predicate: (q) => q.queryKey[0] !== "auth-config" }) });
   return (
     <div className="flex items-center gap-2 text-xs text-zinc-500">
       <span className="hidden max-w-40 truncate md:inline" title={email}>
@@ -57,7 +78,7 @@ function AccountMenu({ email }: { email: string }) {
   );
 }
 
-function Shell({ me }: { me: Me | undefined }) {
+function Shell({ account }: { account: ReactNode }) {
   const live = useLiveUpdates();
   const issues = useQuery({ queryKey: ["issues"], queryFn: api.issues });
   return (
@@ -85,7 +106,7 @@ function Shell({ me }: { me: Me | undefined }) {
             <span className={cx("size-2 rounded-full", live ? "bg-emerald-500" : "bg-zinc-300 dark:bg-zinc-700")} />
             <span className="hidden sm:inline">{live ? "Live" : "Offline"}</span>
           </div>
-          {me?.mode === "hosted" && me.user && <AccountMenu email={me.user.email} />}
+          {account}
         </div>
       </header>
       <main className="mx-auto max-w-7xl px-4 py-6">

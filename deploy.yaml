@@ -11,6 +11,9 @@ env:
   # Optional, not required: LUCID_PUBLIC_URL (defaults to the address the
   # proxy forwards), LUCID_SIGNUPS=closed, OPENROUTER_API_KEY (Arena replays).
   - DATABASE_URL
+  # Sign-in through Clerk (dashboard.clerk.com → API keys).
+  - CLERK_PUBLISHABLE_KEY
+  - CLERK_SECRET_KEY
 risks:
   - migrations
 release:

@@ -1,13 +1,16 @@
-// Accounts for hosted mode: email + password, a session cookie, and one
-// project per account. Local mode (a server on loopback) skips all of this.
+// Accounts for hosted mode, one project each. Sign-in is Clerk when its keys
+// are set (see clerk.ts), else built-in email + password with a session
+// cookie. Local mode (a server on loopback) skips all of this.
 
 import { createHash, randomBytes, randomUUID, scrypt as scryptCb, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 import { and, eq, gt } from "drizzle-orm";
 import { type Context, Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
+import { type Account, accountForClerkUser } from "./clerk";
 import type { AppContext } from "./context";
 import { type Db, schema } from "./db";
+import { publicEndpoint } from "./install";
 
 const scrypt = promisify(scryptCb) as (password: string, salt: Buffer, length: number) => Promise<Buffer>;
 const { authSessions, memberships, projects, users } = schema;
@@ -61,6 +64,35 @@ export async function sessionFor(db: Db, token: string | undefined) {
   return row ?? null;
 }
 
+type Resolved = { status: "ok"; account: Account } | { status: "signed-out" } | { status: "closed" };
+
+/**
+ * Who is calling, for hosted mode. "closed": a Clerk user with no Lucid
+ * account while sign-ups are closed.
+ */
+export async function resolveAccount(ctx: AppContext, c: Context): Promise<Resolved> {
+  if (!ctx.clerk) {
+    const session = await sessionFor(ctx.db, getCookie(c, SESSION_COOKIE));
+    return session ? { status: "ok", account: session } : { status: "signed-out" };
+  }
+  // Tokens name the page that requested them (azp); only ours count. Extra
+  // origins (a Vite dev server) come from CLERK_AUTHORIZED_PARTIES.
+  const origins = [publicEndpoint(c), ...(process.env.CLERK_AUTHORIZED_PARTIES ?? "").split(",").map((o) => o.trim()).filter(Boolean)];
+  let clerkId: string | null;
+  try {
+    clerkId = await ctx.clerk.identify(c.req.raw, origins);
+  } catch (error) {
+    ctx.log.warn(`[auth] Clerk token check failed: ${(error as Error).message}`);
+    clerkId = null;
+  }
+  if (!clerkId) return { status: "signed-out" };
+  const clerk = ctx.clerk;
+  const account = await accountForClerkUser(ctx.db, clerkId, () => clerk.profile(clerkId), { signups: ctx.signups !== false });
+  return account ? { status: "ok", account } : { status: "closed" };
+}
+
+export const CLOSED = "This Lucid server is invite-only. Ask its owner for access.";
+
 const isSecure = (c: Context) => c.req.header("x-forwarded-proto") === "https" || new URL(c.req.url).protocol === "https:";
 
 function setSessionCookie(c: Context, token: string) {
@@ -83,12 +115,28 @@ export function authRoutes(ctx: AppContext) {
     return next();
   });
 
+  /** Public: what the web app needs before it can show a sign-in screen. */
+  app.get("/config", (c) =>
+    c.json({
+      mode: ctx.localMode ? "local" : "hosted",
+      provider: ctx.localMode ? "none" : ctx.clerk ? "clerk" : "password",
+      publishableKey: ctx.clerk?.publishableKey ?? null,
+      signups: ctx.signups !== false,
+    }),
+  );
+
   app.get("/me", async (c) => {
     if (ctx.localMode) return c.json({ mode: "local" });
-    const session = await sessionFor(ctx.db, getCookie(c, SESSION_COOKIE));
-    if (!session) return c.json({ mode: "hosted", user: null, signups: ctx.signups !== false }, 401);
-    return c.json({ mode: "hosted", user: { email: session.email, name: session.name }, projectId: session.projectId });
+    const resolved = await resolveAccount(ctx, c);
+    if (resolved.status === "closed") return c.json({ mode: "hosted", user: null, error: CLOSED, closed: true }, 403);
+    if (resolved.status === "signed-out") return c.json({ mode: "hosted", user: null, signups: ctx.signups !== false }, 401);
+    const { email, name, projectId } = resolved.account;
+    return c.json({ mode: "hosted", user: { email, name }, projectId });
   });
+
+  // Clerk servers sign in through Clerk only.
+  app.use("/signup", async (c, next) => (ctx.clerk ? c.json({ error: "Sign-in is handled by Clerk on this server." }, 404) : next()));
+  app.use("/login", async (c, next) => (ctx.clerk ? c.json({ error: "Sign-in is handled by Clerk on this server." }, 404) : next()));
 
   app.post("/signup", async (c) => {
     if (ctx.localMode) return c.json({ error: "Accounts are only used when Lucid is hosted." }, 400);
@@ -113,7 +161,7 @@ export function authRoutes(ctx: AppContext) {
       return c.json({ error: "Too many attempts. Try again in a few minutes." }, 429);
     }
     const [user] = await ctx.db.select().from(users).where(eq(users.email, email));
-    const ok = user && typeof body.password === "string" ? await verifyPassword(body.password, user.passwordHash) : false;
+    const ok = user?.passwordHash && typeof body.password === "string" ? await verifyPassword(body.password, user.passwordHash) : false;
     if (!user || !ok) {
       const next = { count: (lock && lock.until > Date.now() ? lock.count : 0) + 1, until: Date.now() + LOCKOUT_MS };
       failures.set(email, next);

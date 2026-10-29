@@ -1,3 +1,4 @@
+import type { ClerkAuth } from "./clerk";
 import type { Db } from "./db";
 import type { ChatClient } from "./ee/arena/llm";
 import type { LiveHub } from "./live";
@@ -14,6 +15,8 @@ export type AppContext = {
   defaultProjectId: string;
   /** Hosted mode: whether new accounts can sign up (default true). */
   signups?: boolean;
+  /** Hosted mode with Clerk keys: Clerk handles sign-in instead of email + password. */
+  clerk?: ClerkAuth;
   log: Pick<Console, "info" | "warn" | "error">;
   /**
    * Model access for Arena replays and the judge (bring your own key). Unset

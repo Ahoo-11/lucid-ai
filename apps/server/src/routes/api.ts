@@ -3,11 +3,10 @@
 
 import { and, asc, count, desc, eq, gte, ilike, isNull, lt, max, or, sql, sum } from "drizzle-orm";
 import { Hono } from "hono";
-import { getCookie } from "hono/cookie";
 import { streamSSE } from "hono/streaming";
 import type { AppContext, AppEnv } from "../context";
 import { schema } from "../db";
-import { SESSION_COOKIE, sessionFor } from "../auth";
+import { CLOSED, resolveAccount } from "../auth";
 import { arenaRoutes } from "../ee/arena/routes";
 import { errorSignature, hintFor } from "../insights";
 import { publicEndpoint } from "../install";
@@ -56,9 +55,13 @@ export function apiRoutes(ctx: AppContext) {
       c.set("projectId", ctx.defaultProjectId);
       return next();
     }
-    const session = await sessionFor(db, getCookie(c, SESSION_COOKIE));
-    if (!session) return c.json({ error: "Sign in required" }, 401);
-    c.set("projectId", session.projectId);
+    // With Clerk, changes need the bearer token: the session cookie alone
+    // (which EventSource relies on) is only good for reading.
+    if (ctx.clerk && c.req.method !== "GET" && !c.req.header("authorization")) return c.json({ error: "Sign in required" }, 401);
+    const resolved = await resolveAccount(ctx, c);
+    if (resolved.status === "closed") return c.json({ error: CLOSED }, 403);
+    if (resolved.status === "signed-out") return c.json({ error: "Sign in required" }, 401);
+    c.set("projectId", resolved.account.projectId);
     return next();
   });
 

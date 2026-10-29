@@ -32,6 +32,9 @@ services:
       LUCID_PUBLIC_URL: ${LUCID_PUBLIC_URL:-}
       # closed = only accounts that already exist can sign in
       LUCID_SIGNUPS: ${LUCID_SIGNUPS:-open}
+      # Optional: sign-in through Clerk instead of built-in email + password
+      CLERK_PUBLISHABLE_KEY: ${CLERK_PUBLISHABLE_KEY:-}
+      CLERK_SECRET_KEY: ${CLERK_SECRET_KEY:-}
       # Optional: a model key for Arena replays and the judge
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
     ports:

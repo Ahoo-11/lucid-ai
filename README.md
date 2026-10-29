@@ -31,13 +31,14 @@ The Connect page in the dashboard has these with your address and key filled in.
 
 ## Host it
 
-`docker compose up -d` in `selfhost/` (put `POSTGRES_PASSWORD=…` in `selfhost/.env` first), or deploy the root `Dockerfile` with `deploy.yaml` and an external Postgres. Binding to anything other than localhost turns on hosted mode: email sign-in, one project per account, keys required for ingest.
+`docker compose up -d` in `selfhost/` (put `POSTGRES_PASSWORD=…` in `selfhost/.env` first), or deploy the root `Dockerfile` with `deploy.yaml` and an external Postgres. Binding to anything other than localhost turns on hosted mode: sign-in, one project per account, keys required for ingest. Sign-in is Clerk when both Clerk keys are set, else built-in email + password.
 
 | Variable | |
 |---|---|
 | `DATABASE_URL` | Postgres. Required when hosted (the embedded database is for one machine). |
 | `LUCID_PUBLIC_URL` | Optional. The public address shown in setup snippets and the Hermes installer; by default it comes from the reverse proxy's `X-Forwarded-Proto` / `X-Forwarded-Host`. |
-| `LUCID_SIGNUPS=closed` | Only existing accounts can sign in. |
+| `CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY` | Sign-in through Clerk. The first time a Clerk user arrives, Lucid creates their account and project; an existing password account with the same verified email is linked instead. Add `CLERK_AUTHORIZED_PARTIES=http://localhost:5173` when using the Vite dev server. |
+| `LUCID_SIGNUPS=closed` | Only existing accounts can sign in (Clerk users without one see an invite-only screen). |
 | `LUCID_AUTH=on` | Hosted mode even on localhost (for testing). |
 | `OPENROUTER_API_KEY` | Arena replays and the AI judge. |
 

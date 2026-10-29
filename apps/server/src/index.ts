@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { serve } from "@hono/node-server";
 import { count } from "drizzle-orm";
 import { createApp } from "./app";
+import { clerkAuth } from "./clerk";
 import { openDb, schema } from "./db";
 import { openAICompatibleClient } from "./ee/arena/llm";
 import { createApiKey, ensureDefaultProject } from "./keys";
@@ -37,13 +38,23 @@ if (localMode && keys === 0) {
   console.info(`Created an ingest key (saved to ${join(dataDir, "api-key")})`);
 }
 
+// Hosted sign-in: Clerk when both keys are set, else built-in email + password.
+const clerkSecret = userEnv("CLERK_SECRET_KEY");
+const clerkPublishable = userEnv("CLERK_PUBLISHABLE_KEY");
+const clerk = !localMode && clerkSecret && clerkPublishable ? clerkAuth({ secretKey: clerkSecret, publishableKey: clerkPublishable }) : undefined;
+if (!localMode && !clerk && (clerkSecret || clerkPublishable)) console.warn("Clerk: set both CLERK_SECRET_KEY and CLERK_PUBLISHABLE_KEY; using email + password sign-in.");
+
 const live = new LiveHub();
 // Arena replays and the judge use your own key (OpenRouter by default: one key, every model).
 const replayKey = process.env.LUCID_REPLAY_API_KEY || userEnv("OPENROUTER_API_KEY");
 const chat = replayKey ? openAICompatibleClient({ apiKey: replayKey, baseUrl: process.env.LUCID_REPLAY_BASE_URL }) : undefined;
 if (!chat) console.info("Arena: no OPENROUTER_API_KEY (or LUCID_REPLAY_API_KEY) set, so replays are off.");
-const ctx = { db, live, localMode, signups, defaultProjectId: projectId, log: console, chat };
-console.info(localMode ? "Mode: local (no sign-in, this machine only)" : `Mode: hosted (sign-in required, sign-ups ${signups ? "open" : "closed"})`);
+const ctx = { db, live, localMode, signups, defaultProjectId: projectId, log: console, chat, clerk };
+console.info(
+  localMode
+    ? "Mode: local (no sign-in, this machine only)"
+    : `Mode: hosted (${clerk ? "Clerk" : "email + password"} sign-in, sign-ups ${signups ? "open" : "closed"})`,
+);
 
 if (process.env.LUCID_OFFLINE !== "1") {
   startCatalogRefresh(db, async (runIds) => {

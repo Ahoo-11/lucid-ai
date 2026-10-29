@@ -155,18 +155,33 @@ export type BlindPair = {
 
 export type VariantInput = { model: string; systemPrompt?: string; promptMode?: "append" | "replace" };
 
+// With Clerk, every call carries the session token. Clerk refreshes it
+// (it lives about a minute), so it is fetched per request, not stored.
+let tokenSource: (() => Promise<string | null>) | null = null;
+export const setTokenSource = (source: typeof tokenSource) => {
+  tokenSource = source;
+};
+const authHeaders = async (): Promise<Record<string, string>> => {
+  const token = tokenSource ? await tokenSource() : null;
+  return token ? { authorization: `Bearer ${token}` } : {};
+};
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`/api${path}`, { ...init, headers: { "content-type": "application/json", ...init?.headers } });
+  const response = await fetch(`/api${path}`, { ...init, headers: { "content-type": "application/json", ...(await authHeaders()), ...init?.headers } });
   if (!response.ok) throw new Error((await response.json().catch(() => null))?.error ?? `Request failed (${response.status})`);
   return response.json() as Promise<T>;
 }
 
-export type Me = { mode: "local" } | { mode: "hosted"; user: { email: string; name: string | null } | null; signups?: boolean; projectId?: string };
+export type AuthConfig = { mode: "local" | "hosted"; provider: "none" | "clerk" | "password"; publishableKey: string | null; signups: boolean };
+
+export type Me =
+  | { mode: "local" }
+  | { mode: "hosted"; user: { email: string | null; name: string | null } | null; signups?: boolean; projectId?: string; closed?: boolean; error?: string };
 
 const authCall = async (path: string, body?: unknown) => {
   const response = await fetch(`/api/auth${path}`, {
     method: body === undefined ? "GET" : "POST",
-    headers: body === undefined ? undefined : { "content-type": "application/json" },
+    headers: { ...(body === undefined ? {} : { "content-type": "application/json" }), ...(await authHeaders()) },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const json = (await response.json().catch(() => ({}))) as Record<string, unknown>;
@@ -176,7 +191,12 @@ const authCall = async (path: string, body?: unknown) => {
 
 export const api = {
   auth: {
-    // /me answers 401 with a body when signed out; that's a state, not an error.
+    config: async () => {
+      const response = await fetch("/api/auth/config");
+      if (!response.ok) throw new Error(`Lucid did not answer (${response.status})`);
+      return (await response.json()) as AuthConfig;
+    },
+    // /me answers 401/403 with a body when signed out or not let in; that's a state, not an error.
     me: () => authCall("/me") as Promise<Me>,
     login: (email: string, password: string) => authCall("/login", { email, password }),
     signup: (email: string, password: string, name: string) => authCall("/signup", { email, password, name }),
