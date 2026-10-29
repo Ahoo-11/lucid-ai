@@ -1,13 +1,16 @@
-# Self-host Lucid with one command:  docker compose up -d
+# Self-host Lucid with Postgres. From this folder:
+#   echo "POSTGRES_PASSWORD=<a long random password>" > .env
+#   docker compose up -d
 # Then open http://<your server>:4318 and create the first account.
 # Put it behind HTTPS (Caddy, Traefik, nginx) before exposing it to the internet.
+# (Kept out of the repo root so the root holds a single Dockerfile deploy.)
 services:
   postgres:
     image: postgres:17
     restart: unless-stopped
     environment:
       POSTGRES_USER: lucid
-      # Set POSTGRES_PASSWORD in .env; Postgres refuses to start without one.
+      # Postgres refuses to start without a password, so a missing .env fails loudly.
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
       POSTGRES_DB: lucid
     volumes:
@@ -18,7 +21,7 @@ services:
       retries: 10
 
   lucid:
-    build: .
+    build: ..
     restart: unless-stopped
     depends_on:
       postgres:

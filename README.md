@@ -31,7 +31,7 @@ The Connect page in the dashboard has these with your address and key filled in.
 
 ## Host it
 
-`docker compose up -d` (see `docker-compose.yml`; set `POSTGRES_PASSWORD`) or deploy the `Dockerfile` with `deploy.yaml`. Binding to anything other than localhost turns on hosted mode: email sign-in, one project per account, keys required for ingest.
+`docker compose up -d` in `selfhost/` (put `POSTGRES_PASSWORD=…` in `selfhost/.env` first), or deploy the root `Dockerfile` with `deploy.yaml` and an external Postgres. Binding to anything other than localhost turns on hosted mode: email sign-in, one project per account, keys required for ingest.
 
 | Variable | |
 |---|---|
