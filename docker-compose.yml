@@ -7,7 +7,8 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: lucid
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      # Set POSTGRES_PASSWORD in .env; Postgres refuses to start without one.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
       POSTGRES_DB: lucid
     volumes:
       - lucid-db:/var/lib/postgresql/data
@@ -23,7 +24,7 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgres://lucid:${POSTGRES_PASSWORD}@postgres:5432/lucid
+      DATABASE_URL: postgres://lucid:${POSTGRES_PASSWORD:-}@postgres:5432/lucid
       # Optional: by default the address comes from your reverse proxy's forwarded headers
       LUCID_PUBLIC_URL: ${LUCID_PUBLIC_URL:-}
       # closed = only accounts that already exist can sign in
