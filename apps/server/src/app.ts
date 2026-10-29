@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { serveStatic } from "@hono/node-server/serve-static";
+import { sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { authRoutes } from "./auth";
 import type { AppContext } from "./context";
@@ -15,7 +16,16 @@ const WEB_DIST = fileURLToPath(new URL("../../web/dist", import.meta.url));
 export function createApp(ctx: AppContext) {
   const app = new Hono();
   const ingest = createIngest(ctx);
-  app.get("/healthz", (c) => c.json({ ok: true }));
+  // Checks the database too, so a release that cannot reach it is never promoted.
+  app.get("/healthz", async (c) => {
+    try {
+      await ctx.db.execute(sql`select 1`);
+      return c.json({ ok: true });
+    } catch (error) {
+      ctx.log.error(`[health] database check failed: ${(error as Error).message}`);
+      return c.json({ ok: false, error: "database unreachable" }, 503);
+    }
+  });
   app.route("/", installRoutes());
   app.route("/api/auth", authRoutes(ctx));
   app.route("/api", apiRoutes(ctx));

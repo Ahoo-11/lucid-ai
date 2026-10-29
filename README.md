@@ -36,7 +36,7 @@ The Connect page in the dashboard has these with your address and key filled in.
 | Variable | |
 |---|---|
 | `DATABASE_URL` | Postgres. Required when hosted (the embedded database is for one machine). |
-| `LUCID_PUBLIC_URL` | The public HTTPS address, used in setup snippets and the Hermes installer. |
+| `LUCID_PUBLIC_URL` | Optional. The public address shown in setup snippets and the Hermes installer; by default it comes from the reverse proxy's `X-Forwarded-Proto` / `X-Forwarded-Host`. |
 | `LUCID_SIGNUPS=closed` | Only existing accounts can sign in. |
 | `LUCID_AUTH=on` | Hosted mode even on localhost (for testing). |
 | `OPENROUTER_API_KEY` | Arena replays and the AI judge. |

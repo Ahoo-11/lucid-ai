@@ -24,7 +24,8 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgres://lucid:${POSTGRES_PASSWORD}@postgres:5432/lucid
-      LUCID_PUBLIC_URL: ${LUCID_PUBLIC_URL:-http://localhost:4318}
+      # Optional: by default the address comes from your reverse proxy's forwarded headers
+      LUCID_PUBLIC_URL: ${LUCID_PUBLIC_URL:-}
       # closed = only accounts that already exist can sign in
       LUCID_SIGNUPS: ${LUCID_SIGNUPS:-open}
       # Optional: a model key for Arena replays and the judge

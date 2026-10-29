@@ -3,14 +3,14 @@ type: dockerfile
 target: vps
 port: 4318
 health:
+  # Also checks the database, so a release that cannot reach it is not promoted.
   path: /healthz
 env:
   # Postgres for all data. Release overlap rules out the embedded database
   # (the old and new release would share files), so this is required.
+  # Optional, not required: LUCID_PUBLIC_URL (defaults to the address the
+  # proxy forwards), LUCID_SIGNUPS=closed, OPENROUTER_API_KEY (Arena replays).
   - DATABASE_URL
-  # The public address, e.g. https://lucid.example.com. Shown in setup snippets
-  # and proxy URLs.
-  - LUCID_PUBLIC_URL
 risks:
   - migrations
 release:
@@ -25,9 +25,8 @@ release:
   verify:
     - id: schema
       image: node:22-bookworm-slim
-      # Re-running migrations is a no-op on an up-to-date database; it fails if
-      # the database is unreachable or the schema is ahead of this commit.
-      command: npm ci && npm run db:migrate -w @lucid/server
+      # Read-only: fails unless every migration in this commit is applied.
+      command: npm ci && npm run db:verify -w @lucid/server
       env:
         - DATABASE_URL
       covers:

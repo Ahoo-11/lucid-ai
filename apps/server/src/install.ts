@@ -12,8 +12,19 @@ import { type Context, Hono } from "hono";
 const HERMES_PLUGIN = fileURLToPath(new URL("../../../packages/hermes-plugin/lucid/", import.meta.url));
 const HERMES_FILES = new Set(["__init__.py", "plugin.yaml"]);
 
-/** The address agents should send to: LUCID_PUBLIC_URL behind a reverse proxy, else what the browser used. */
-export const publicEndpoint = (c: Context) => (process.env.LUCID_PUBLIC_URL ?? new URL(c.req.url).origin).replace(/\/+$/, "");
+/**
+ * The address agents should send to: LUCID_PUBLIC_URL when set, else what the
+ * browser used. Behind a TLS-terminating proxy (Traefik, Caddy, nginx) the
+ * request arrives as plain http, so the proxy's forwarded headers win.
+ */
+export function publicEndpoint(c: Context) {
+  if (process.env.LUCID_PUBLIC_URL) return process.env.LUCID_PUBLIC_URL.replace(/\/+$/, "");
+  const url = new URL(c.req.url);
+  const first = (name: string) => c.req.header(name)?.split(",")[0]?.trim();
+  const proto = first("x-forwarded-proto");
+  const scheme = proto === "https" || proto === "http" ? proto : url.protocol.slice(0, -1);
+  return `${scheme}://${first("x-forwarded-host") || url.host}`;
+}
 
 // The endpoint is pasted into a shell script, so only plain URLs pass.
 const SAFE_URL = /^https?:\/\/[A-Za-z0-9.-]+(:\d+)?(\/[A-Za-z0-9._~/-]*)?$/;
