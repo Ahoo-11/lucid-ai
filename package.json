@@ -1,0 +1,30 @@
+{
+  "name": "lucid",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,web -c blue,magenta \"npm run dev -w @lucid/server\" \"npm run dev -w @lucid/web\"",
+    "dev:server": "npm run dev -w @lucid/server",
+    "dev:web": "npm run dev -w @lucid/web",
+    "build": "npm run build -w @lucid/web",
+    "db:generate": "npm run db:generate -w @lucid/server",
+    "lucid": "tsx packages/cli/src/index.ts",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "concurrently": "^10.0.6",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  }
+}

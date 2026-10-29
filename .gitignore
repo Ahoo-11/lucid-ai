@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.lucid/
+.lucid-*/
+*.log
+.env
+.env.*
+coverage/
+__pycache__/
+# Machine-specific dev server configs (absolute paths)
+.claude/

@@ -1,0 +1,16 @@
+{
+  "name": "@lucid/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "lucid": "./dist/lucid.mjs"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --platform=node --target=node22 --format=esm --outfile=dist/lucid.mjs && node -e \"require('fs').cpSync('../hermes-plugin/lucid','dist/hermes-plugin',{recursive:true,filter:s=>!s.includes('__pycache__')})\""
+  }
+}

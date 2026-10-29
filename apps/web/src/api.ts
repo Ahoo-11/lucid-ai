@@ -1,0 +1,233 @@
+import { useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
+
+export type Status = "ok" | "error" | "running";
+export type StepKind = "llm" | "tool" | "agent" | "handoff" | "guardrail" | "retrieval" | "decision" | "event" | "error";
+
+export type RunListItem = {
+  id: string;
+  name: string | null;
+  input: string | null;
+  output: string | null;
+  status: Status;
+  harness: string;
+  model: string | null;
+  startedAt: string | null;
+  endedAt: string | null;
+  durationMs: number | null;
+  costUsd: number | null;
+  costIncomplete: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  stepCount: number;
+  llmCallCount: number;
+  toolCallCount: number;
+  errorCount: number;
+  sessionId: string | null;
+  sessionTitle: string | null;
+  metadata: { systemTurn?: boolean } | null;
+};
+
+export type Step = {
+  id: string;
+  runId: string;
+  externalId: string;
+  parentExternalId: string | null;
+  kind: StepKind;
+  name: string;
+  status: Status;
+  startedAt: string | null;
+  endedAt: string | null;
+  durationMs: number | null;
+  model: string | null;
+  provider: string | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cacheReadTokens: number | null;
+  cacheWriteTokens: number | null;
+  reasoningTokens: number | null;
+  costUsd: number | null;
+  costSource: string | null;
+  toolName: string | null;
+  inputHash: string | null;
+  outputHash: string | null;
+  inputPreview: string | null;
+  outputPreview: string | null;
+  error: string | null;
+  attrs: {
+    availableTools?: string[];
+    reasoning?: string;
+    stopReason?: string;
+    requestParams?: Record<string, unknown>;
+    permissionDecision?: string;
+    agentId?: string;
+    extra?: Record<string, unknown>;
+  } | null;
+};
+
+export type Session = { id: string; title: string | null; harness: string; cwd: string | null; gitBranch: string | null };
+
+export type RunDetail = {
+  run: RunListItem & { input: string | null; output: string | null; systemPromptHash: string | null; reasoningTokens: number };
+  session: Session | null;
+  steps: Step[];
+  sessionRuns: { id: string; name: string | null; startedAt: string | null; status: Status }[];
+};
+
+export type Overview = {
+  last24h: { runs: number; errors: number; costUsd: number | null; avgDurationMs: number | null };
+  harnesses: { harness: string; runs: number; lastAt: string | null }[];
+  topTools: { tool: string; calls: number; errors: number; avgMs: number | null }[];
+};
+
+export type Issue = {
+  id: string;
+  kind: StepKind;
+  toolName: string | null;
+  signature: string;
+  sample: string | null;
+  occurrences: number;
+  runs: number;
+  lastSeen: string | null;
+  firstSeen: string | null;
+  examples: { runId: string; runName: string | null }[];
+  title: string;
+  why: string;
+  fix: string;
+};
+
+export type ConnectStatus = {
+  endpoint: string;
+  localMode: boolean;
+  runs: number;
+  sources: { source: string; harness: string | null; events: number; lastAt: string | null }[];
+  /** Providers the LLM proxy forwards to, including any the server added. */
+  providers: string[];
+};
+
+export type ApiKey = { id: string; name: string; prefix: string; createdAt: string; lastUsedAt: string | null };
+
+export type ArenaModel = { id: string; name: string; inputPerMillion: number; outputPerMillion: number; contextLength: number | null };
+export type ToolCall = { id?: string; name: string; input?: unknown };
+export type Output = { text?: string; toolCalls?: ToolCall[] };
+export type DecisionContext = { request?: string; recent?: { role: string; text: string }[]; tools?: string[] };
+export type Standing = { wins: number; losses: number; ties: number; games: number; winRate: number | null; rating: number | null };
+
+export type Candidate = {
+  id: string;
+  label: string;
+  kind?: "original" | "replay";
+  model?: string | null;
+  promptMode?: string | null;
+  systemPrompt?: string | null;
+  sameToolAsOriginal?: number | null;
+  errors?: string[];
+  trials: { done: number; failed: number; pending: number };
+  avgCostUsd: number | null;
+  avgLatencyMs: number | null;
+  human?: Standing;
+  judge?: Standing;
+};
+
+export type Experiment = {
+  experiment: { id: string; name: string; judgeModel: string | null; rubric: string | null; revealed: boolean; createdAt: string };
+  items: { id: string; runId: string; stepId: string; context: DecisionContext | null }[];
+  progress: {
+    replays: { done: number; pending: number; failed: number; total: number };
+    humanVotes: number;
+    judgeVotes: number;
+    pairs: number;
+    replaying: boolean;
+    judging: boolean;
+  };
+  agreement: { compared: number; agreed: number };
+  candidates: Candidate[];
+};
+
+export type ExperimentSummary = { id: string; name: string; createdAt: string; revealed: boolean; decisions: number; candidates: number; humanVotes: number; judgeVotes: number; pending: number };
+
+export type BlindPair = {
+  pair: { itemId: string; context: DecisionContext | null; a: { trialId: string; output: Output | null }; b: { trialId: string; output: Output | null } } | null;
+  progress: { voted: number; total: number };
+};
+
+export type VariantInput = { model: string; systemPrompt?: string; promptMode?: "append" | "replace" };
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`/api${path}`, { ...init, headers: { "content-type": "application/json", ...init?.headers } });
+  if (!response.ok) throw new Error((await response.json().catch(() => null))?.error ?? `Request failed (${response.status})`);
+  return response.json() as Promise<T>;
+}
+
+export type Me = { mode: "local" } | { mode: "hosted"; user: { email: string; name: string | null } | null; signups?: boolean; projectId?: string };
+
+const authCall = async (path: string, body?: unknown) => {
+  const response = await fetch(`/api/auth${path}`, {
+    method: body === undefined ? "GET" : "POST",
+    headers: body === undefined ? undefined : { "content-type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const json = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!response.ok && path !== "/me") throw new Error(String(json.error ?? `Request failed (${response.status})`));
+  return json;
+};
+
+export const api = {
+  auth: {
+    // /me answers 401 with a body when signed out; that's a state, not an error.
+    me: () => authCall("/me") as Promise<Me>,
+    login: (email: string, password: string) => authCall("/login", { email, password }),
+    signup: (email: string, password: string, name: string) => authCall("/signup", { email, password, name }),
+    logout: () => authCall("/logout", {}),
+  },
+  overview: () => request<Overview>("/overview"),
+  runs: (params: URLSearchParams) => request<{ runs: RunListItem[]; nextBefore: string | null }>(`/runs?${params}`),
+  run: (id: string) => request<RunDetail>(`/runs/${id}`),
+  issues: () => request<{ issues: Issue[] }>("/issues"),
+  connect: () => request<ConnectStatus>("/connect/status"),
+  keys: () => request<{ keys: ApiKey[] }>("/keys"),
+  createKey: (name: string) => request<ApiKey & { key: string }>("/keys", { method: "POST", body: JSON.stringify({ name }) }),
+  revokeKey: (id: string) => request<{ ok: true }>(`/keys/${id}`, { method: "DELETE" }),
+  arena: {
+    models: () => request<{ configured: boolean; models: ArenaModel[]; suggestedJudge: string | null }>("/arena/models"),
+    check: (stepId: string) => request<{ ok: true; messages: number; tools: number } | { ok: false; reason: string }>(`/arena/check?step=${stepId}`),
+    list: () => request<{ experiments: ExperimentSummary[] }>("/arena/experiments"),
+    create: (body: { stepIds: string[]; variants: VariantInput[]; judgeModel?: string; name?: string }) =>
+      request<{ id: string; items: number; skipped: { stepId: string; reason: string }[] }>("/arena/experiments", { method: "POST", body: JSON.stringify(body) }),
+    get: (id: string) => request<Experiment>(`/arena/experiments/${id}`),
+    pair: (id: string) => request<BlindPair>(`/arena/experiments/${id}/pair`),
+    vote: (id: string, body: { itemId: string; a: string; b: string; winner: "a" | "b" | "tie" }) =>
+      request<BlindPair>(`/arena/experiments/${id}/votes`, { method: "POST", body: JSON.stringify(body) }),
+    judge: (id: string, model?: string) => request<{ started: boolean; pairs?: number }>(`/arena/experiments/${id}/judge`, { method: "POST", body: JSON.stringify({ model }) }),
+    reveal: (id: string) => request<Experiment>(`/arena/experiments/${id}/reveal`, { method: "POST" }),
+    retry: (id: string) => request<{ ok: true }>(`/arena/experiments/${id}/retry`, { method: "POST" }),
+  },
+  blob: async (hash: string) => {
+    const response = await fetch(`/api/blobs/${hash}`);
+    if (!response.ok) throw new Error("Content not found");
+    return response.text();
+  },
+};
+
+/** Refetches everything on screen when new data arrives (debounced while a session is busy). */
+export function useLiveUpdates() {
+  const queryClient = useQueryClient();
+  const [connected, setConnected] = useState(false);
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const source = new EventSource("/api/live");
+    source.addEventListener("ready", () => setConnected(true));
+    source.addEventListener("runs", () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => void queryClient.invalidateQueries(), 400);
+    });
+    source.onerror = () => setConnected(false);
+    return () => {
+      clearTimeout(timer);
+      source.close();
+    };
+  }, [queryClient]);
+  return connected;
+}

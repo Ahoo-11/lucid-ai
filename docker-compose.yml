@@ -1,0 +1,36 @@
+# Self-host Lucid with one command:  docker compose up -d
+# Then open http://<your server>:4318 and create the first account.
+# Put it behind HTTPS (Caddy, Traefik, nginx) before exposing it to the internet.
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: lucid
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: lucid
+    volumes:
+      - lucid-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lucid"]
+      interval: 5s
+      retries: 10
+
+  lucid:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://lucid:${POSTGRES_PASSWORD}@postgres:5432/lucid
+      LUCID_PUBLIC_URL: ${LUCID_PUBLIC_URL:-http://localhost:4318}
+      # closed = only accounts that already exist can sign in
+      LUCID_SIGNUPS: ${LUCID_SIGNUPS:-open}
+      # Optional: a model key for Arena replays and the judge
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+    ports:
+      - "4318:4318"
+
+volumes:
+  lucid-db:

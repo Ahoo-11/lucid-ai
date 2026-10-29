@@ -1,0 +1,11 @@
+node_modules
+**/node_modules
+**/dist
+.lucid
+.lucid-*
+.git
+.claude
+*.log
+**/__pycache__
+.env
+.env.*
