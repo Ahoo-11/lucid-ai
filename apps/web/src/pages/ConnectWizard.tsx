@@ -538,11 +538,11 @@ const lines = (...parts: (string | false)[]) =>
     .map((line) => (line as string).trim())
     .join("\n");
 
-/** A prompt to paste into the agent itself, so it does the setup. */
-function AskAgent({ title, sub, prompt, note }: { title: string; sub: string; prompt: string; note?: string }) {
+/** A prompt to paste into the agent itself, so it does the setup. `inStep`: inside an Instruction, which spaces it already. */
+function AskAgent({ title, sub, prompt, note, inStep }: { title: string; sub: string; prompt: string; note?: string; inStep?: boolean }) {
   const [copied, setCopied] = useState(false);
   return (
-    <div className="mt-6 rounded-2xl bg-zinc-50 p-4 ring-1 ring-zinc-200 dark:bg-white/[0.03] dark:ring-white/10">
+    <div className={cx(!inStep && "mt-6", "rounded-2xl bg-zinc-50 p-4 ring-1 ring-zinc-200 dark:bg-white/[0.03] dark:ring-white/10")}>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
         <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-brand-300 text-zinc-950">
           <Sparkles className="size-5" />
@@ -604,9 +604,74 @@ function devicePrompt(target: Target) {
 3. When it finishes, tell me what it connected and that I need to restart you.`;
 }
 
+/** For a Hermes on a server: sent from wherever the owner chats with it, it runs the command where Hermes lives. */
+function cloudPrompt(target: Target) {
+  return `Connect yourself to Lucid, an observability tool, so I can see your runs.
+
+1. Run this with your terminal tool:
+   ${connectCommand(target, "linux")}
+   It waits up to 10 minutes for my approval, so run it in the background and keep reading its output.
+   If your terminal runs in a separate sandbox rather than where you yourself run, stop and tell me instead.
+2. As soon as it prints a link and a code, send me both so I can tap Approve.
+3. When it says it's done, tell me what it connected and that I should send /restart.`;
+}
+
+type Where = "here" | "cloud";
+
 function DeviceSetup({ target, agent }: { target: Target; agent: AgentChoice }) {
-  const [os, setOs] = useState<Os>(detectOs);
+  const [where, setWhere] = useState<Where>("here");
   const hermes = agent.id === "hermes";
+  return (
+    <>
+      {hermes && (
+        <div className="mt-7 space-y-3">
+          <p className="font-semibold">Where does Hermes run?</p>
+          <Segmented
+            label="Where Hermes runs"
+            value={where}
+            onChange={setWhere}
+            options={[
+              { id: "here", label: "This computer" },
+              { id: "cloud", label: "Server or cloud" },
+            ]}
+          />
+        </div>
+      )}
+      {hermes && where === "cloud" ? <CloudHermesSetup target={target} /> : <LocalSetup target={target} hermes={hermes} />}
+    </>
+  );
+}
+
+/** No terminal: the owner asks Hermes in chat, and Hermes runs the command on its own server. */
+function CloudHermesSetup({ target }: { target: Target }) {
+  return (
+    <>
+      <Instructions>
+        <Instruction n={1} title="Send this message to Hermes">
+          <Fine>In Telegram, Discord, Slack or its web dashboard: wherever you chat with it. Hermes runs one command on its own server.</Fine>
+          <AskAgent title="Message for Hermes" sub="Copy it, then paste it into your chat with Hermes." prompt={cloudPrompt(target)} inStep />
+        </Instruction>
+        <Instruction n={2} title="Tap Approve on the link Hermes sends back">
+          <Fine>It opens here on any device where you're signed in. Check that the code matches the one in Hermes' reply.</Fine>
+        </Instruction>
+        <Instruction n={3} title="Send /restart to Hermes">
+          <Fine>Every chat shows up here from then on, plus your last 30 days.</Fine>
+        </Instruction>
+      </Instructions>
+      <More title="Rather use the server's terminal?">
+        <Fine>Run this where Hermes runs, open the link it prints, then restart Hermes.</Fine>
+        <Snippet label="Terminal" code={connectCommand(target, "linux")} />
+        <Fine>Hermes in Docker: run it inside the container instead. Replace the name with your container's.</Fine>
+        <Snippet label="Docker host" code={`docker exec -it hermes sh -c "${connectCommand(target, "linux")}"\ndocker restart hermes`} />
+      </More>
+      <WhatChanges />
+      <LoopbackWarning target={target} />
+    </>
+  );
+}
+
+function LocalSetup({ target, hermes }: { target: Target; hermes: boolean }) {
+  const [os, setOs] = useState<Os>(detectOs);
   const short = hermes ? "Hermes" : "Claude Code";
   return (
     <>
@@ -619,7 +684,7 @@ function DeviceSetup({ target, agent }: { target: Target; agent: AgentChoice }) 
             options={[
               { id: "mac", label: "Mac" },
               { id: "windows", label: "Windows" },
-              { id: "linux", label: "Linux or a server" },
+              { id: "linux", label: hermes ? "Linux" : "Linux or a server" },
             ]}
           />
           <Snippet label={os === "windows" ? "PowerShell" : "Terminal"} code={connectCommand(target, os)} />
@@ -632,23 +697,21 @@ function DeviceSetup({ target, agent }: { target: Target; agent: AgentChoice }) 
         </Instruction>
       </Instructions>
       <AskAgent title={`Or let ${short} do it`} sub={`Paste this into ${short}. It runs the command and shows you the link to approve.`} prompt={devicePrompt(target)} />
-      {hermes && (
-        <More title="Hermes runs in Docker?">
-          <Fine>Run the command inside the container, then restart it. Replace the name with your container's.</Fine>
-          <Snippet label="Docker host" code={`docker exec -it hermes sh -c "${connectCommand(target, "linux")}"\ndocker restart hermes`} />
-        </More>
-      )}
-      <More title="What this changes">
-        <Fine>
-          The command looks for Claude Code and Hermes Agent on that computer and connects each one it finds, after you approve. Claude Code gets hooks in <Mono>~/.claude/settings.json</Mono> (a backup is kept) and a
-          small helper in <Mono>~/.lucid</Mono>; it needs Node.js 18 or newer. Hermes gets the Lucid plugin in its <Mono>plugins</Mono> folder and three <Mono>LUCID_</Mono> settings in its <Mono>.env</Mono>. Run it
-          again any time to update.
-        </Fine>
-      </More>
+      <WhatChanges />
       {os === "linux" && <LoopbackWarning target={target} />}
     </>
   );
 }
+
+const WhatChanges = () => (
+  <More title="What this changes">
+    <Fine>
+      The command looks for Claude Code and Hermes Agent on that computer and connects each one it finds, after you approve. Claude Code gets hooks in <Mono>~/.claude/settings.json</Mono> (a backup is kept) and a small
+      helper in <Mono>~/.lucid</Mono>; it needs Node.js 18 or newer. Hermes gets the Lucid plugin in its <Mono>plugins</Mono> folder and three <Mono>LUCID_</Mono> settings in its <Mono>.env</Mono>. Run it again any time to
+      update.
+    </Fine>
+  </More>
+);
 
 // ---------------------------------------------------------------------------
 // Any agent, through the LLM proxy
