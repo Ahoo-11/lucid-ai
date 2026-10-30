@@ -1,0 +1,806 @@
+// The connect wizard: pick your agent by its logo, pick the AI it calls when
+// that matters, then copy one snippet while Lucid listens for the first run.
+
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ArrowLeft, ArrowRight, Braces, Check, ChevronDown, KeyRound, Loader2, TriangleAlert, X } from "lucide-react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router";
+import { type ConnectStatus, api } from "../api";
+import { GITHUB_URL } from "../brand";
+import { BRANDS, type Brand, BrandMark } from "../landing/logos";
+import { cx } from "../ui";
+
+type Method = "proxy" | "hermes" | "claude-code" | "otel";
+export type AgentChoice = { id: string; name: string; brand?: Brand; method: Method };
+
+/** Each agent goes the simplest way that captures it today. */
+const AGENT_CHOICES: AgentChoice[] = [
+  { id: "claude-code", name: "Claude Code", brand: BRANDS.claudeCode, method: "claude-code" },
+  { id: "hermes", name: "Hermes Agent", brand: BRANDS.hermes, method: "hermes" },
+  { id: "langgraph", name: "LangGraph", brand: BRANDS.langgraph, method: "proxy" },
+  { id: "langchain", name: "LangChain", brand: BRANDS.langchain, method: "proxy" },
+  { id: "crewai", name: "CrewAI", brand: BRANDS.crewai, method: "proxy" },
+  { id: "pydantic-ai", name: "Pydantic AI", brand: BRANDS.pydanticai, method: "proxy" },
+  // Both call OpenAI's Responses API, which the proxy doesn't record, so they use tracing.
+  { id: "openai-agents", name: "OpenAI Agents SDK", brand: BRANDS.openai, method: "otel" },
+  { id: "vercel-ai", name: "Vercel AI SDK", brand: BRANDS.vercel, method: "otel" },
+  { id: "custom", name: "Something else", method: "proxy" },
+];
+const OTEL_CHOICE: AgentChoice = { id: "otel", name: "OpenTelemetry", brand: BRANDS.otel, method: "otel" };
+
+/** For /connect?agent=…, including the older method names (proxy, otel). */
+export function findAgent(id: string | null) {
+  if (id === "proxy") return AGENT_CHOICES.find((agent) => agent.id === "custom")!;
+  if (id === "otel") return OTEL_CHOICE;
+  return AGENT_CHOICES.find((agent) => agent.id === id) ?? null;
+}
+
+/** Where agents send, and the key that goes with it. */
+type Target = {
+  endpoint: string;
+  /** Sending from this machine to a local Lucid: no key needed. */
+  keyless: boolean;
+  key: string;
+  /** Lucid listens on this computer only, so other machines cannot reach it. */
+  loopback: boolean;
+  local: boolean;
+};
+
+function toTarget(status: ConnectStatus, key: string | null): Target {
+  return {
+    endpoint: status.endpoint,
+    keyless: status.localMode && !key,
+    key: key ?? "<your-lucid-key>",
+    loopback: /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(status.endpoint),
+    local: status.localMode,
+  };
+}
+
+/** Keys are named after the agent they were made for, so the key list reads like a list of agents. */
+const keyName = (agent: AgentChoice) => (agent.id === "custom" ? "My agent" : agent.name);
+
+/** Changes whenever anything new arrives. */
+const fingerprint = (status: ConnectStatus) =>
+  `${status.runs}|${status.sources.reduce((sum, source) => sum + source.events, 0)}|${status.sources.reduce((latest, source) => (source.lastAt && source.lastAt > latest ? source.lastAt : latest), "")}`;
+
+type Step = "agent" | "provider" | "setup" | "done";
+
+export function ConnectWizard({
+  open,
+  onClose,
+  initialAgent,
+  newKey,
+  onKey,
+}: {
+  open: boolean;
+  onClose: () => void;
+  initialAgent: AgentChoice | null;
+  /** A key made earlier on this page, reused rather than making another. */
+  newKey: string | null;
+  onKey: (key: string) => void;
+}) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const dialog = ref.current;
+    if (open && !dialog?.open) dialog?.showModal();
+    if (!open && dialog?.open) dialog.close();
+  }, [open]);
+  // The page behind stays put while the dialog scrolls.
+  useEffect(() => {
+    if (!open) return;
+    const root = document.documentElement;
+    const previous = root.style.overflow;
+    root.style.overflow = "hidden";
+    return () => {
+      root.style.overflow = previous;
+    };
+  }, [open]);
+
+  return (
+    <dialog
+      ref={ref}
+      aria-label="Connect an agent"
+      onClose={onClose}
+      // A click on the dialog itself, not its content, is a click on the backdrop.
+      onClick={(event) => event.target === event.currentTarget && ref.current?.close()}
+      // Anchored near the top, so a taller step grows downward instead of jumping.
+      className="mx-auto mt-[max(0.75rem,8dvh)] max-h-[calc(100dvh-max(0.75rem,8dvh)-0.75rem)] w-[calc(100%-1.5rem)] max-w-2xl overflow-hidden rounded-3xl bg-white p-0 text-zinc-900 shadow-2xl ring-1 ring-black/5 backdrop:bg-zinc-950/70 backdrop:backdrop-blur-sm open:motion-safe:animate-[rise_.25s_ease-out] dark:bg-zinc-900 dark:text-zinc-100 dark:ring-white/10"
+    >
+      {open && <Wizard initialAgent={initialAgent} newKey={newKey} onKey={onKey} close={() => ref.current?.close()} />}
+    </dialog>
+  );
+}
+
+function Wizard({ initialAgent, newKey, onKey, close }: { initialAgent: AgentChoice | null; newKey: string | null; onKey: (key: string) => void; close: () => void }) {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [agent, setAgent] = useState(initialAgent);
+  const [provider, setProvider] = useState<string | null>(null);
+  const [step, setStep] = useState<Step>(initialAgent ? (initialAgent.method === "proxy" ? "provider" : "setup") : "agent");
+  const status = useQuery({ queryKey: ["connect"], queryFn: api.connect, refetchInterval: step === "setup" ? 2_000 : false });
+
+  // What had arrived when the setup was shown, so only something new counts.
+  const baseline = useRef<string | null>(null);
+  const now = status.data ? fingerprint(status.data) : null;
+  if (step === "agent" || step === "provider" || baseline.current === null) baseline.current = now;
+  const arrived = step === "setup" && now !== null && baseline.current !== null && now !== baseline.current;
+  useEffect(() => {
+    if (arrived) setStep("done");
+  }, [arrived]);
+
+  // Hosted Lucid needs a key in every setup: make one as soon as it's needed.
+  const createKey = useMutation({
+    mutationFn: (name: string) => api.createKey(name),
+    onSuccess: (created) => {
+      onKey(created.key);
+      void queryClient.invalidateQueries({ queryKey: ["keys"] });
+    },
+  });
+  const needsKey = step === "setup" && !!status.data && !status.data.localMode && !newKey;
+  const asked = useRef(false);
+  useEffect(() => {
+    if (needsKey && agent && !asked.current) {
+      asked.current = true;
+      createKey.mutate(keyName(agent));
+    }
+  }, [needsKey, agent, createKey]);
+
+  const flow: Step[] = agent && agent.method !== "proxy" ? ["agent", "setup"] : ["agent", "provider", "setup"];
+  const position = step === "done" ? flow.length : flow.indexOf(step);
+  const back = step === "provider" || step === "setup" ? () => setStep(flow[flow.indexOf(step) - 1] ?? "agent") : null;
+
+  const pickAgent = (picked: AgentChoice) => {
+    setAgent(picked);
+    setStep(picked.method === "proxy" ? "provider" : "setup");
+  };
+  const restart = () => {
+    setAgent(null);
+    setProvider(null);
+    setStep("agent");
+  };
+
+  return (
+    <div className="flex max-h-[inherit] flex-col">
+      <div className="flex items-center gap-3 px-5 pt-5 sm:px-8 sm:pt-6">
+        <button
+          type="button"
+          onClick={back ?? undefined}
+          aria-label="Back"
+          className={cx("-ml-1.5 rounded-full p-1.5 text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-900 dark:hover:bg-white/10 dark:hover:text-white", !back && "invisible")}
+        >
+          <ArrowLeft className="size-5" />
+        </button>
+        <div className="flex flex-1 gap-1.5" aria-hidden>
+          {flow.map((name, index) => (
+            <span key={name} className={cx("h-1 flex-1 rounded-full transition-colors duration-300", index <= position ? "bg-brand-500 dark:bg-brand-300" : "bg-zinc-200 dark:bg-white/10")} />
+          ))}
+        </div>
+        <button type="button" onClick={close} aria-label="Close" className="-mr-1.5 rounded-full p-1.5 text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-900 dark:hover:bg-white/10 dark:hover:text-white">
+          <X className="size-5" />
+        </button>
+      </div>
+
+      <div key={step} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pt-6 pb-7 motion-safe:animate-[rise_.3s_ease-out] sm:px-8 sm:pb-8">
+        {step === "agent" && <AgentStep onPick={pickAgent} />}
+        {step === "provider" && agent && (
+          <ProviderStep
+            agent={agent}
+            providers={status.data?.providers ?? Object.keys(PROVIDERS)}
+            onPick={(picked) => {
+              setProvider(picked);
+              setStep("setup");
+            }}
+          />
+        )}
+        {step === "setup" && agent && (
+          <SetupStep
+            agent={agent}
+            provider={provider ?? "openai"}
+            status={status.data}
+            newKey={newKey}
+            keyState={createKey}
+            onRetryKey={() => createKey.mutate(keyName(agent))}
+            onUseOtel={() => setAgent({ ...agent, method: "otel" })}
+          />
+        )}
+        {step === "done" && agent && (
+          <Done
+            agent={agent}
+            first={(status.data?.runs ?? 0) > 0 && baseline.current?.startsWith("0|") === true}
+            onSee={() => {
+              close();
+              navigate("/runs");
+            }}
+            onAnother={restart}
+          />
+        )}
+      </div>
+
+      {step === "setup" && (
+        <div className="flex items-center gap-3 border-t border-zinc-200 bg-zinc-50 px-5 py-3.5 sm:px-8 dark:border-white/10 dark:bg-white/[0.03]">
+          <span className="relative flex size-2.5 shrink-0">
+            <span className="absolute inline-flex size-full animate-ping rounded-full bg-amber-400 opacity-60" />
+            <span className="relative inline-flex size-2.5 rounded-full bg-amber-400" />
+          </span>
+          <p className="min-w-0 flex-1 text-sm text-zinc-600 dark:text-zinc-300">Waiting for your agent… this changes as soon as it runs.</p>
+          <button type="button" onClick={close} className="shrink-0 text-sm font-medium text-zinc-500 transition hover:text-zinc-900 dark:hover:text-white">
+            Finish later
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Steps
+
+function Heading({ title, sub }: { title: string; sub?: ReactNode }) {
+  return (
+    <div>
+      <h2 className="font-display text-2xl font-bold tracking-tight text-balance sm:text-[1.75rem]">{title}</h2>
+      {sub && <p className="mt-1.5 text-zinc-500 dark:text-zinc-400">{sub}</p>}
+    </div>
+  );
+}
+
+/** A logo on a small tile, light or dark with the theme; one-color logos take the text color. */
+export function LogoWell({ children, size = "size-12 rounded-xl", className }: { children: ReactNode; size?: string; className?: string }) {
+  return (
+    <span className={cx("flex shrink-0 items-center justify-center bg-white text-zinc-900 shadow-sm ring-1 ring-zinc-200 dark:bg-zinc-800 dark:text-white dark:ring-white/10", size, className)}>
+      {children}
+    </span>
+  );
+}
+
+function AgentMark({ agent, className = "size-7" }: { agent: AgentChoice; className?: string }) {
+  return agent.brand ? <BrandMark brand={agent.brand} className={className} /> : <Braces className={cx("text-zinc-500 dark:text-zinc-400", className)} strokeWidth={1.75} />;
+}
+
+function Tile({ label, onClick, small, children }: { label: string; onClick: () => void; small?: boolean; children: ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cx(
+        "group flex flex-col items-center rounded-2xl text-center ring-1 ring-zinc-200 transition hover:-translate-y-0.5 hover:bg-zinc-50 hover:ring-zinc-300 focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:outline-none dark:ring-white/10 dark:hover:bg-white/[0.04] dark:hover:ring-white/25 dark:focus-visible:ring-brand-300",
+        small ? "gap-2 px-1.5 py-3" : "gap-3 px-2 py-4 sm:py-5",
+      )}
+    >
+      <LogoWell size={small ? "size-10 rounded-lg" : "size-12 rounded-xl"} className="transition group-hover:shadow-md">
+        {children}
+      </LogoWell>
+      <span className={cx("leading-tight font-medium", small ? "text-xs" : "text-sm")}>{label}</span>
+    </button>
+  );
+}
+
+function AgentStep({ onPick }: { onPick: (agent: AgentChoice) => void }) {
+  return (
+    <>
+      <Heading title="Which agent do you want to watch?" sub="Pick one. You can connect more later." />
+      <div className="mt-6 grid grid-cols-3 gap-2 sm:gap-3">
+        {AGENT_CHOICES.map((agent) => (
+          <Tile key={agent.id} label={agent.name} onClick={() => onPick(agent)}>
+            <AgentMark agent={agent} />
+          </Tile>
+        ))}
+      </div>
+      <p className="mt-5 text-center text-sm text-zinc-500 dark:text-zinc-400">
+        Already send OpenTelemetry?{" "}
+        <button type="button" onClick={() => onPick(OTEL_CHOICE)} className="font-medium text-zinc-900 underline decoration-zinc-300 underline-offset-4 hover:decoration-zinc-900 dark:text-white dark:decoration-zinc-600 dark:hover:decoration-white">
+          Use that
+        </button>
+      </p>
+    </>
+  );
+}
+
+function ProviderStep({ agent, providers, onPick }: { agent: AgentChoice; providers: string[]; onPick: (provider: string) => void }) {
+  return (
+    <>
+      <Heading title={agent.id === "custom" ? "Which AI does your agent use?" : `Which AI does your ${agent.name} agent use?`} sub="The company whose API key it has." />
+      <div className="mt-6 grid grid-cols-3 gap-2 sm:grid-cols-5">
+        {providers.map((id) => {
+          const known = PROVIDERS[id];
+          return (
+            <Tile key={id} small label={known?.label ?? id} onClick={() => onPick(id)}>
+              {known ? <BrandMark brand={known.brand} className="size-6" /> : <span className="font-display text-lg font-bold uppercase">{id[0]}</span>}
+            </Tile>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+function SetupStep({
+  agent,
+  provider,
+  status,
+  newKey,
+  keyState,
+  onRetryKey,
+  onUseOtel,
+}: {
+  agent: AgentChoice;
+  provider: string;
+  status: ConnectStatus | undefined;
+  newKey: string | null;
+  keyState: { isPending: boolean; isError: boolean; error: Error | null };
+  onRetryKey: () => void;
+  onUseOtel: () => void;
+}) {
+  if (!status) return <Loader2 className="mx-auto my-16 size-5 animate-spin text-zinc-400" aria-label="Loading" />;
+  const target = toTarget(status, newKey);
+  const via = agent.method === "proxy" ? PROVIDERS[provider] : undefined;
+  return (
+    <>
+      <div className="flex items-center gap-4">
+        <div className="relative">
+          <LogoWell size="size-14 rounded-2xl">
+            <AgentMark agent={agent} className="size-8" />
+          </LogoWell>
+          {via && (
+            <LogoWell size="size-7 rounded-lg" className="absolute -right-2 -bottom-2">
+              <BrandMark brand={via.brand} className="size-4" />
+            </LogoWell>
+          )}
+        </div>
+        <Heading title={agent.id === "custom" ? "Connect your agent" : `Connect ${agent.name}`} sub={SUBTITLES[agent.method]} />
+      </div>
+
+      {!target.keyless && <KeyNote created={!!newKey} state={keyState} onRetry={onRetryKey} />}
+
+      {agent.method === "claude-code" && <ClaudeCodeSetup target={target} />}
+      {agent.method === "hermes" && <HermesSetup target={target} />}
+      {agent.method === "proxy" && <ProxySetup target={target} provider={provider} agent={agent} onUseOtel={onUseOtel} />}
+      {agent.method === "otel" && <OtelSetup target={target} agent={agent} />}
+    </>
+  );
+}
+
+const SUBTITLES: Record<Method, string> = {
+  "claude-code": "One command, then use Claude Code as usual.",
+  hermes: "One command where Hermes runs.",
+  proxy: "Change one setting. Your code stays the same.",
+  otel: "Send the traces it already makes to Lucid.",
+};
+
+function KeyNote({ created, state, onRetry }: { created: boolean; state: { isPending: boolean; isError: boolean; error: Error | null }; onRetry: () => void }) {
+  if (state.isError) {
+    return (
+      <Callout tone="warn">
+        Couldn't make your Lucid key: {state.error?.message}.{" "}
+        <button type="button" onClick={onRetry} className="font-semibold underline">
+          Try again
+        </button>
+      </Callout>
+    );
+  }
+  return (
+    <p className="mt-6 flex items-center gap-2.5 rounded-xl bg-brand-50 px-3.5 py-2.5 text-sm text-brand-900 ring-1 ring-brand-200 dark:bg-brand-300/10 dark:text-brand-100 dark:ring-brand-300/20">
+      {created ? <KeyRound className="size-4 shrink-0" /> : <Loader2 className="size-4 shrink-0 animate-spin" />}
+      {created ? "We made you a Lucid key and put it in the code below. It's shown only once." : "Making your Lucid key…"}
+    </p>
+  );
+}
+
+function Callout({ tone = "info", children }: { tone?: "info" | "warn"; children: ReactNode }) {
+  return (
+    <p
+      className={cx(
+        "mt-6 flex gap-2.5 rounded-xl px-3.5 py-2.5 text-sm",
+        tone === "warn" ? "bg-amber-50 text-amber-900 ring-1 ring-amber-200 dark:bg-amber-400/10 dark:text-amber-200 dark:ring-amber-400/20" : "bg-zinc-50 text-zinc-600 dark:bg-white/5 dark:text-zinc-300",
+      )}
+    >
+      {tone === "warn" && <TriangleAlert className="mt-0.5 size-4 shrink-0" />}
+      <span>{children}</span>
+    </p>
+  );
+}
+
+function Done({ agent, first, onSee, onAnother }: { agent: AgentChoice; first: boolean; onSee: () => void; onAnother: () => void }) {
+  return (
+    <div className="flex flex-col items-center py-6 text-center sm:py-10">
+      <div className="relative">
+        <span className="absolute inset-0 rounded-full bg-brand-300/60 motion-safe:animate-ping" />
+        <span className="relative flex size-20 items-center justify-center rounded-full bg-brand-300 text-zinc-950 shadow-[0_10px_40px_-8px_rgba(216,248,74,0.7)]">
+          <Check className="size-10" strokeWidth={2.5} />
+        </span>
+        <LogoWell size="size-9 rounded-xl" className="absolute -right-3 -bottom-2">
+          <AgentMark agent={agent} className="size-5" />
+        </LogoWell>
+      </div>
+      <h2 className="mt-8 font-display text-3xl font-bold tracking-tight">You're connected</h2>
+      <p className="mt-2 max-w-sm text-zinc-500 dark:text-zinc-400">
+        {first ? "Your first run just arrived. From now on, every run shows up in Lucid on its own." : "New data just arrived. Every run from now on shows up in Lucid on its own."}
+      </p>
+      <div className="mt-8 flex flex-wrap justify-center gap-3">
+        <button
+          type="button"
+          onClick={onSee}
+          className="group inline-flex items-center gap-2 rounded-full bg-brand-300 px-5 py-2.5 text-sm font-semibold text-zinc-950 shadow-[0_10px_40px_-12px_rgba(216,248,74,0.6)] transition hover:bg-brand-200"
+        >
+          See your runs
+          <ArrowRight className="size-4 transition-transform group-hover:translate-x-0.5" />
+        </button>
+        <button type="button" onClick={onAnother} className="rounded-full px-5 py-2.5 text-sm font-semibold ring-1 ring-zinc-200 transition hover:bg-zinc-50 dark:ring-white/15 dark:hover:bg-white/5">
+          Connect another
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Setup building blocks
+
+function Instructions({ children }: { children: ReactNode }) {
+  return <ol className="mt-7 space-y-6">{children}</ol>;
+}
+
+function Instruction({ n, title, children }: { n: number; title: string; children?: ReactNode }) {
+  return (
+    <li className="space-y-3">
+      <div className="flex items-center gap-3.5 font-semibold">
+        <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-sm font-bold text-white dark:bg-brand-300 dark:text-zinc-950">{n}</span>
+        {title}
+      </div>
+      {/* Indented under the title on wider screens; full width on phones, where code needs the room. */}
+      {children && <div className="space-y-3 sm:pl-[2.625rem]">{children}</div>}
+    </li>
+  );
+}
+
+/** A terminal-style block with one big copy button. Dark in both themes. */
+function Snippet({ code, label }: { code: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="overflow-hidden rounded-xl bg-zinc-950 ring-1 ring-zinc-900 dark:ring-white/10">
+      <div className="flex items-center justify-between gap-2 border-b border-white/10 py-1.5 pr-1.5 pl-3.5">
+        <span className="truncate text-xs text-zinc-400">{label}</span>
+        <button
+          type="button"
+          onClick={() => {
+            void navigator.clipboard.writeText(code).then(() => {
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1_500);
+            });
+          }}
+          className={cx(
+            "inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold transition",
+            copied ? "bg-emerald-400 text-zinc-950" : "bg-brand-300 text-zinc-950 hover:bg-brand-200",
+          )}
+        >
+          {copied ? <Check className="size-3.5" /> : null}
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+      {/* Wrapped, not scrolled sideways: the key at the end of a long line has to be seen to be trusted. */}
+      <pre className="p-3.5 font-mono text-[13px] leading-relaxed whitespace-pre-wrap text-zinc-100 [overflow-wrap:anywhere]">{code}</pre>
+    </div>
+  );
+}
+
+function Segmented<T extends string>({ label, value, options, onChange }: { label: string; value: T; options: { id: T; label: string }[]; onChange: (id: T) => void }) {
+  return (
+    <div className="inline-flex max-w-full flex-wrap gap-1 rounded-2xl bg-zinc-100 p-1 dark:bg-white/5" role="tablist" aria-label={label}>
+      {options.map((option) => (
+        <button
+          key={option.id}
+          type="button"
+          role="tab"
+          aria-selected={option.id === value}
+          onClick={() => onChange(option.id)}
+          className={cx(
+            "rounded-xl px-3 py-1.5 text-sm font-medium transition",
+            option.id === value ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-white" : "text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white",
+          )}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function Fine({ children }: { children: ReactNode }) {
+  return <p className="text-sm text-zinc-500 dark:text-zinc-400">{children}</p>;
+}
+
+const Mono = ({ children }: { children: ReactNode }) => <code className="rounded bg-zinc-100 px-1 py-0.5 font-mono text-[0.85em] dark:bg-white/10">{children}</code>;
+
+function More({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <details className="group mt-6 rounded-xl ring-1 ring-zinc-200 dark:ring-white/10">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 text-sm font-medium text-zinc-600 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-white [&::-webkit-details-marker]:hidden">
+        {title}
+        <ChevronDown className="size-4 transition group-open:rotate-180" />
+      </summary>
+      <div className="space-y-3 border-t border-zinc-200 px-4 py-4 dark:border-white/10">{children}</div>
+    </details>
+  );
+}
+
+/** Only when an agent on another machine has to reach a Lucid that listens on this one. */
+const LoopbackWarning = ({ target }: { target: Target }) =>
+  target.loopback ? (
+    <Callout tone="warn">
+      This Lucid listens on this computer only ({target.endpoint}), so a server or container elsewhere can't reach it. Use hosted Lucid for those, or run this one with <Mono>HOST=0.0.0.0</Mono> behind HTTPS and set{" "}
+      <Mono>LUCID_PUBLIC_URL</Mono>.
+    </Callout>
+  ) : null;
+
+/** The CLI already defaults to this machine's server, so only other endpoints need the flag. */
+function cliFlags(target: Target) {
+  const isLocalDefault = /^http:\/\/(localhost|127\.0\.0\.1):4318$/.test(target.endpoint);
+  return [!isLocalDefault && `--endpoint ${target.endpoint}`, !target.keyless && `--key ${target.key}`].filter(Boolean).join(" ");
+}
+
+const lines = (...parts: (string | false)[]) =>
+  parts
+    .filter(Boolean)
+    .map((line) => (line as string).trim())
+    .join("\n");
+
+// ---------------------------------------------------------------------------
+// Claude Code
+
+function ClaudeCodeSetup({ target }: { target: Target }) {
+  const flags = cliFlags(target);
+  const code = lines(
+    !target.local && `git clone ${GITHUB_URL} && cd lucid-ai && npm install`,
+    `npm run lucid -- connect claude-code ${flags}`,
+    `npm run lucid -- import claude-code --days 7 ${flags}`,
+  );
+  return (
+    <>
+      <Instructions>
+        <Instruction n={1} title={target.local ? "In the Lucid folder, run this" : "Open a terminal and paste this"}>
+          <Snippet label={target.local ? "Lucid folder" : "Terminal · needs git and Node.js"} code={code} />
+        </Instruction>
+        <Instruction n={2} title="Use Claude Code as usual">
+          <Fine>Every session shows up here as it happens. Your last 7 days come in too, so there's something to look at right away.</Fine>
+        </Instruction>
+      </Instructions>
+      <More title="What this changes">
+        <Fine>
+          It adds hooks to <Mono>~/.claude/settings.json</Mono> and keeps a backup. To undo it, run <Mono>npm run lucid -- disconnect claude-code</Mono>.
+        </Fine>
+      </More>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Hermes
+
+type HermesWhere = "server" | "docker" | "here";
+
+function HermesSetup({ target }: { target: Target }) {
+  const [picked, setWhere] = useState<HermesWhere | null>(null);
+  const where = picked ?? (target.local ? "here" : "server");
+  const env = [!target.keyless && `LUCID_API_KEY=${target.key}`, "LUCID_BACKFILL_DAYS=30"].filter(Boolean).join(" ");
+  const install = `curl -fsSL ${target.endpoint}/install/hermes.sh | ${env} sh`;
+  const flags = cliFlags(target);
+  const code =
+    where === "here"
+      ? lines(`npm run lucid -- connect hermes ${flags}`, `npm run lucid -- import hermes --days 30 ${flags}`)
+      : where === "docker"
+        ? `docker exec <hermes-container> sh -c '${install}'\ndocker restart <hermes-container>`
+        : install;
+  const options: { id: HermesWhere; label: string }[] = target.local
+    ? [
+        { id: "here", label: "This computer" },
+        { id: "server", label: "A server" },
+        { id: "docker", label: "Docker" },
+      ]
+    : [
+        { id: "server", label: "Mac, Linux or a server" },
+        { id: "docker", label: "Docker" },
+      ];
+  return (
+    <>
+      <Instructions>
+        <Instruction n={1} title={where === "here" ? "In the Lucid folder, run this" : where === "docker" ? "On the Docker host, run this" : "Paste this where Hermes runs"}>
+          <Segmented label="Where Hermes runs" value={where} onChange={setWhere} options={options} />
+          <Snippet label={where === "here" ? "Lucid folder" : where === "docker" ? "Docker host" : "Terminal, as the user that runs Hermes"} code={code} />
+        </Instruction>
+        <Instruction n={2} title={where === "docker" ? "Use Hermes as usual" : "Restart Hermes"}>
+          <Fine>Every chat shows up here from now on, plus your last 30 days.</Fine>
+        </Instruction>
+      </Instructions>
+      {where !== "here" && <LoopbackWarning target={target} />}
+      <More title="What this changes">
+        <Fine>
+          {where === "here" ? (
+            <>
+              It copies the plugin into Hermes' <Mono>plugins/lucid</Mono> folder and enables it, then reads your past chats from Hermes' <Mono>state.db</Mono> without changing it.
+            </>
+          ) : (
+            <>
+              It installs the plugin into Hermes' <Mono>plugins/lucid</Mono> folder, adds the <Mono>LUCID_*</Mono> settings to Hermes' <Mono>.env</Mono> and enables it. Run it again any time to update. If Lucid
+              can't be reached, events wait on disk and are sent later.
+            </>
+          )}
+        </Fine>
+      </More>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Any agent, through the LLM proxy
+
+/** `base`: what goes after the provider to make the base URL its own SDK expects. */
+const PROVIDERS: Record<string, { label: string; brand: Brand; base: string; keyVar: string; model: string; anthropic?: boolean }> = {
+  openai: { label: "OpenAI", brand: BRANDS.openai, base: "/v1", keyVar: "OPENAI_API_KEY", model: "gpt-4o-mini" },
+  anthropic: { label: "Anthropic", brand: BRANDS.anthropic, base: "", keyVar: "ANTHROPIC_API_KEY", model: "claude-haiku-4-5", anthropic: true },
+  openrouter: { label: "OpenRouter", brand: BRANDS.openrouter, base: "/v1", keyVar: "OPENROUTER_API_KEY", model: "openai/gpt-4o-mini" },
+  gemini: { label: "Gemini", brand: BRANDS.gemini, base: "", keyVar: "GEMINI_API_KEY", model: "gemini-2.5-flash" },
+  groq: { label: "Groq", brand: BRANDS.groq, base: "/v1", keyVar: "GROQ_API_KEY", model: "llama-3.3-70b-versatile" },
+  deepseek: { label: "DeepSeek", brand: BRANDS.deepseek, base: "/v1", keyVar: "DEEPSEEK_API_KEY", model: "deepseek-chat" },
+  mistral: { label: "Mistral", brand: BRANDS.mistral, base: "/v1", keyVar: "MISTRAL_API_KEY", model: "mistral-small-latest" },
+  xai: { label: "xAI", brand: BRANDS.xai, base: "/v1", keyVar: "XAI_API_KEY", model: "grok-3-mini" },
+  together: { label: "Together", brand: BRANDS.together, base: "/v1", keyVar: "TOGETHER_API_KEY", model: "meta-llama/Llama-3.3-70B-Instruct-Turbo" },
+  fireworks: { label: "Fireworks", brand: BRANDS.fireworks, base: "/v1", keyVar: "FIREWORKS_API_KEY", model: "accounts/fireworks/models/llama-v3p3-70b-instruct" },
+};
+
+type Lang = "env" | "python" | "typescript" | "curl";
+
+function proxyBase(target: Target, provider: string) {
+  const prefix = target.keyless ? `${target.endpoint}/proxy` : `${target.endpoint}/p/${target.key}`;
+  return `${prefix}/${provider}${PROVIDERS[provider]?.base ?? ""}`;
+}
+
+function proxySnippet(lang: Lang, provider: string, base: string) {
+  const p = PROVIDERS[provider] ?? { label: provider, base: "", keyVar: "API_KEY", model: "<model>" };
+  if ("anthropic" in p && p.anthropic) {
+    if (lang === "env") return `ANTHROPIC_BASE_URL=${base}`;
+    if (lang === "python") return `from anthropic import Anthropic\n\nclient = Anthropic(base_url="${base}")  # still reads ${p.keyVar}`;
+    if (lang === "typescript") return `import Anthropic from "@anthropic-ai/sdk";\n\nconst client = new Anthropic({ baseURL: "${base}" }); // still reads ${p.keyVar}`;
+    return `curl ${base}/v1/messages \\\n  -H "x-api-key: $${p.keyVar}" \\\n  -H "anthropic-version: 2023-06-01" \\\n  -H "content-type: application/json" \\\n  -d '{"model": "${p.model}", "max_tokens": 256, "messages": [{"role": "user", "content": "Hello"}]}'`;
+  }
+  if (lang === "env") return provider === "openai" ? `OPENAI_BASE_URL=${base}` : `OPENAI_BASE_URL=${base}\nOPENAI_API_KEY=<your ${p.label} key>`;
+  if (lang === "python") return `import os\nfrom openai import OpenAI\n\nclient = OpenAI(\n    base_url="${base}",\n    api_key=os.environ["${p.keyVar}"],  # your ${p.label} key, as before\n)`;
+  if (lang === "typescript") return `import OpenAI from "openai";\n\nconst client = new OpenAI({\n  baseURL: "${base}",\n  apiKey: process.env.${p.keyVar}, // your ${p.label} key, as before\n});`;
+  return `curl ${base}/chat/completions \\\n  -H "Authorization: Bearer $${p.keyVar}" \\\n  -H "content-type: application/json" \\\n  -d '{"model": "${p.model}", "messages": [{"role": "user", "content": "Hello"}]}'`;
+}
+
+const LANG_TITLES: Record<Lang, string> = {
+  env: "Add this to your agent's .env file",
+  python: "Point your client at Lucid",
+  typescript: "Point your client at Lucid",
+  curl: "Or try it right now in a terminal",
+};
+
+const LABEL_HEADERS: { name: string; what: string }[] = [
+  { name: "x-lucid-agent", what: "The agent's name, shown on every run." },
+  { name: "x-lucid-session", what: "Groups calls into one conversation." },
+  { name: "x-lucid-run", what: "Groups calls into one task." },
+  { name: "x-lucid-user", what: "Your end user's id, to find their runs later." },
+];
+
+function ProxySetup({ target, provider, agent, onUseOtel }: { target: Target; provider: string; agent: AgentChoice; onUseOtel: () => void }) {
+  const [lang, setLang] = useState<Lang>("env");
+  const base = proxyBase(target, provider);
+  const p = PROVIDERS[provider];
+  const label = p?.label ?? provider;
+  const client = p?.anthropic ? "Anthropic" : "OpenAI";
+  return (
+    <>
+      <Instructions>
+        <Instruction n={1} title={LANG_TITLES[lang]}>
+          <Segmented
+            label="How your agent is set up"
+            value={lang}
+            onChange={setLang}
+            options={[
+              { id: "env", label: ".env file" },
+              { id: "python", label: "Python" },
+              { id: "typescript", label: "TypeScript" },
+              { id: "curl", label: "Test with curl" },
+            ]}
+          />
+          <Snippet label={lang === "env" ? ".env" : lang === "curl" ? "Terminal" : lang === "python" ? "Python" : "TypeScript"} code={proxySnippet(lang, provider, base)} />
+          {!p && <Fine>A provider added on this server: add the path your client normally puts after the provider's address.</Fine>}
+        </Instruction>
+        <Instruction n={2} title={lang === "curl" ? "Watch it arrive below" : "Restart your agent and run it once"}>
+          <Fine>
+            Your {label} key stays where it is. Lucid passes it on to {label} and never stores it.
+          </Fine>
+        </Instruction>
+      </Instructions>
+      {agent.id === "langgraph" && (
+        <Callout>
+          Want each step of the graph, not just the model calls?{" "}
+          <button type="button" onClick={onUseOtel} className="font-semibold text-zinc-900 underline underline-offset-2 dark:text-white">
+            Use OpenTelemetry instead
+          </button>
+        </Callout>
+      )}
+      <More title="Name and group your runs (optional)">
+        <ul className="space-y-1.5 text-sm">
+          {LABEL_HEADERS.map((header) => (
+            <li key={header.name} className="flex flex-col gap-0.5 sm:flex-row sm:gap-3">
+              <code className="w-32 shrink-0 font-mono text-xs leading-5 text-brand-700 dark:text-brand-300">{header.name}</code>
+              <span className="text-zinc-600 dark:text-zinc-400">{header.what}</span>
+            </li>
+          ))}
+        </ul>
+        <Snippet label="Python" code={`client = ${client}(\n    base_url="${base}",\n    default_headers={"x-lucid-agent": "support-bot", "x-lucid-user": user_id},\n)`} />
+        <Fine>Lucid records chat and messages calls, streaming included. Other calls pass through unrecorded.</Fine>
+      </More>
+      <LoopbackNote target={target} />
+    </>
+  );
+}
+
+const LoopbackNote = ({ target }: { target: Target }) =>
+  target.loopback ? <p className="mt-4 text-xs text-zinc-500 dark:text-zinc-400">Works for agents on this computer. Agents on other machines can't reach {target.endpoint}.</p> : null;
+
+// ---------------------------------------------------------------------------
+// OpenTelemetry
+
+const OTEL_CODE: Record<string, { label: string; code: string }> = {
+  "openai-agents": {
+    label: "Python",
+    code: `# pip install openinference-instrumentation-openai-agents opentelemetry-sdk opentelemetry-exporter-otlp
+from openinference.instrumentation.openai_agents import OpenAIAgentsInstrumentor
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+
+provider = TracerProvider()
+provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))  # reads the settings above
+trace.set_tracer_provider(provider)
+OpenAIAgentsInstrumentor().instrument()`,
+  },
+  langgraph: {
+    label: ".env (add these too)",
+    code: `# pip install "langsmith[otel]"
+LANGSMITH_TRACING=true
+LANGSMITH_OTEL_ENABLED=true
+LANGSMITH_OTEL_ONLY=true`,
+  },
+  "vercel-ai": {
+    label: "TypeScript",
+    code: `// Register an OTLP exporter once (e.g. @vercel/otel in Next.js), then:
+const result = await generateText({
+  model,
+  prompt,
+  experimental_telemetry: { isEnabled: true },
+});`,
+  },
+};
+
+function OtelSetup({ target, agent }: { target: Target; agent: AgentChoice }) {
+  const extra = OTEL_CODE[agent.id];
+  const env = lines(
+    `OTEL_EXPORTER_OTLP_ENDPOINT=${target.endpoint}`,
+    "OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf",
+    !target.keyless && `OTEL_EXPORTER_OTLP_HEADERS=x-api-key=${target.key}`,
+    "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true",
+    "OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental",
+  );
+  return (
+    <>
+      <Instructions>
+        <Instruction n={1} title="Add these to your agent's .env file">
+          <Snippet label=".env" code={env} />
+        </Instruction>
+        {extra && (
+          <Instruction n={2} title="Turn on tracing in your code">
+            <Snippet label={extra.label} code={extra.code} />
+          </Instruction>
+        )}
+        <Instruction n={extra ? 3 : 2} title="Restart your agent and run it once">
+          <Fine>Model calls, tools and handoffs show up here, with prompts and replies included.</Fine>
+        </Instruction>
+      </Instructions>
+      <LoopbackNote target={target} />
+    </>
+  );
+}

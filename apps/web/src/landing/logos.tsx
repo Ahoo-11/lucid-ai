@@ -7,6 +7,7 @@ import { useId, useMemo } from "react";
 import { cx } from "../ui";
 import anthropic from "./logos/anthropic.svg?raw";
 import claudecode from "./logos/claudecode.svg?raw";
+import crewai from "./logos/crewai.svg?raw";
 import deepseek from "./logos/deepseek.svg?raw";
 import fireworks from "./logos/fireworks.svg?raw";
 import gemini from "./logos/gemini.svg?raw";
@@ -19,6 +20,7 @@ import mistral from "./logos/mistral.svg?raw";
 import openai from "./logos/openai.svg?raw";
 import openrouter from "./logos/openrouter.svg?raw";
 import opentelemetry from "./logos/opentelemetry.svg?raw";
+import pydanticai from "./logos/pydanticai.svg?raw";
 import together from "./logos/together.svg?raw";
 import vercel from "./logos/vercel.svg?raw";
 import xai from "./logos/xai.svg?raw";
@@ -30,6 +32,8 @@ export const BRANDS = {
   hermes: { name: "Hermes Agent", svg: hermesagent },
   langgraph: { name: "LangGraph", svg: langgraph },
   langchain: { name: "LangChain", svg: langchain },
+  crewai: { name: "CrewAI", svg: crewai },
+  pydanticai: { name: "Pydantic AI", svg: pydanticai },
   vercel: { name: "Vercel AI SDK", svg: vercel },
   otel: { name: "OpenTelemetry", svg: opentelemetry },
   openai: { name: "OpenAI", svg: openai },

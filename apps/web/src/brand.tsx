@@ -4,6 +4,9 @@
 import { useEffect } from "react";
 import { cx } from "./ui";
 
+export const GITHUB_REPO = "Ahoo-11/lucid-ai";
+export const GITHUB_URL = `https://github.com/${GITHUB_REPO}`;
+
 const LOGO_SIZES = { md: ["size-7", "size-3"], lg: ["size-10", "size-4"], xl: ["size-14", "size-6"] } as const;
 
 export function Logo({ size = "md" }: { size?: keyof typeof LOGO_SIZES }) {

@@ -50,6 +50,13 @@
     rotate: 360deg;
   }
 }
+/* A dialog or wizard step coming in. */
+@keyframes rise {
+  from {
+    opacity: 0;
+    translate: 0 8px;
+  }
+}
 
 html,
 body {

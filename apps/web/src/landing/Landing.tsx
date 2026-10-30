@@ -27,14 +27,11 @@ import {
 } from "lucide-react";
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link } from "react-router";
-import { GridGlow, Logo, TraceLine, Underline, useDarkDocument } from "../brand";
+import { GITHUB_REPO, GITHUB_URL, GridGlow, Logo, TraceLine, Underline, useDarkDocument } from "../brand";
 import { cx } from "../ui";
 import { useClock } from "./clock";
 import { HeroDemo } from "./HeroDemo";
 import { AGENTS, BRANDS, type Brand, BrandMark, PROVIDERS } from "./logos";
-
-const GITHUB_REPO = "Ahoo-11/lucid-ai";
-const GITHUB_URL = `https://github.com/${GITHUB_REPO}`;
 
 export function Landing() {
   const stars = useGitHubStars();
