@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { sql } from "drizzle-orm";
 import { type Context, Hono } from "hono";
+import { compress } from "hono/compress";
 import { authRoutes } from "./auth";
 import type { AppContext } from "./context";
 import { createIngest } from "./ingestService";
@@ -42,12 +43,26 @@ export function createApp(ctx: AppContext) {
     // headers, so only a plain URL goes into the page; otherwise they stay relative.
     const page = (c: Context) => {
       const origin = publicEndpoint(c);
+      // Always revalidated, so a new release shows up on the next load.
+      c.header("Cache-Control", "no-cache");
       return c.html(index.replaceAll("__LUCID_ORIGIN__", SAFE_URL.test(origin) ? origin : ""));
     };
+    // Gzip for the dashboard's files and pages only. Everything above (API,
+    // ingest, the LLM proxy) has already answered, so proxied replies stay
+    // byte-for-byte what the provider sent.
+    app.use("/*", compress());
+    app.use("/assets/*", async (c, next) => {
+      await next();
+      // Bundle names carry a content hash, so a URL never changes meaning.
+      if (c.res.status === 200) c.header("Cache-Control", "public, max-age=31536000, immutable");
+    });
     // Before serveStatic, which would send index.html for "/" as it is.
     app.get("/", page);
     app.get("/index.html", page);
     app.use("/*", serveStatic({ root: WEB_DIST }));
+    // A bundle from an older release: a 404, not the page, which would
+    // otherwise be cached for a year under a script's URL.
+    app.get("/assets/*", (c) => c.notFound());
     app.get("*", page);
   }
   return app;
