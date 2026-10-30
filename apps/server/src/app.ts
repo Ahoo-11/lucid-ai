@@ -8,6 +8,7 @@ import { authRoutes } from "./auth";
 import type { AppContext } from "./context";
 import { createIngest } from "./ingestService";
 import { SAFE_URL, installRoutes, publicEndpoint } from "./install";
+import { linkRoutes } from "./links";
 import { proxyRoutes } from "./proxy";
 import { apiRoutes } from "./routes/api";
 import { ingestRoutes } from "./routes/ingest";
@@ -28,6 +29,8 @@ export function createApp(ctx: AppContext) {
     }
   });
   app.route("/", installRoutes());
+  // Before /api: an installer starts and polls a link without signing in.
+  app.route("/api/links", linkRoutes(ctx));
   app.route("/api/auth", authRoutes(ctx));
   app.route("/api", apiRoutes(ctx));
   // Before ingest: proxy requests carry the agent's provider key in

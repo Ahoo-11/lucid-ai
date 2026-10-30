@@ -5,12 +5,25 @@
 //
 //   curl -fsSL https://<lucid>/install/hermes.sh | LUCID_API_KEY=<key> sh
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { type Context, Hono } from "hono";
 
 const HERMES_PLUGIN = fileURLToPath(new URL("../../../packages/hermes-plugin/lucid/", import.meta.url));
 const HERMES_FILES = new Set(["__init__.py", "plugin.yaml"]);
+/** The CLI as one file (npm run build -w @lucid/cli): what Claude Code's hooks run. */
+const CLI_BUNDLE = fileURLToPath(new URL("../../../packages/cli/dist/lucid.mjs", import.meta.url));
+const INSTALLERS = fileURLToPath(new URL("./installers/", import.meta.url));
+
+/**
+ * The one-command installers (connect.sh, connect.ps1) with this server's
+ * address filled in. They find Claude Code and Hermes on the computer, ask the
+ * person to approve it in the browser (see links.ts), then set each agent up.
+ */
+export function connectScript(file: "connect.sh" | "connect.ps1", endpoint: string) {
+  // A Windows checkout may have turned the line endings into CRLF, which sh can't run.
+  return readFileSync(`${INSTALLERS}${file}`, "utf8").replace(/\r\n/g, "\n").replaceAll("__LUCID_ENDPOINT__", endpoint);
+}
 
 /**
  * The address agents should send to: LUCID_PUBLIC_URL when set, else what the
@@ -67,7 +80,8 @@ if [ -n "\${LUCID_API_KEY:-}" ]; then set_env LUCID_API_KEY "$LUCID_API_KEY"; fi
 if [ -n "\${LUCID_BACKFILL_DAYS:-}" ]; then set_env LUCID_BACKFILL_DAYS "$LUCID_BACKFILL_DAYS"; fi
 
 echo "Installed the Lucid plugin ${version} in $DEST"
-if command -v hermes >/dev/null 2>&1 && hermes plugins enable lucid >/dev/null 2>&1; then
+# </dev/null: under "curl | sh" the rest of this script is on stdin, and hermes would read it.
+if command -v hermes >/dev/null 2>&1 && hermes plugins enable lucid </dev/null >/dev/null 2>&1; then
   echo "Enabled it in Hermes."
 else
   echo "Now run: hermes plugins enable lucid"
@@ -90,6 +104,22 @@ export function installRoutes() {
     const file = c.req.param("file");
     if (!HERMES_FILES.has(file)) return c.text("Not found", 404);
     return c.text(readFileSync(`${HERMES_PLUGIN}${file}`, "utf8"), 200, { "content-type": "text/plain; charset=utf-8" });
+  });
+
+  for (const file of ["connect.sh", "connect.ps1"] as const) {
+    app.get(`/${file}`, (c) => {
+      const endpoint = publicEndpoint(c);
+      if (!SAFE_URL.test(endpoint)) {
+        const message = "Lucid: set LUCID_PUBLIC_URL on the server to a plain https URL";
+        return c.text(file === "connect.sh" ? `echo "${message}" >&2; exit 1\n` : `Write-Host "${message}" -ForegroundColor Red\n`, 500);
+      }
+      return c.text(connectScript(file, endpoint), 200, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-cache" });
+    });
+  }
+
+  app.get("/install/lucid.mjs", (c) => {
+    if (!existsSync(CLI_BUNDLE)) return c.text("This Lucid server has no CLI build (npm run build -w @lucid/cli).", 404);
+    return c.body(readFileSync(CLI_BUNDLE, "utf8"), 200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-cache" });
   });
 
   return app;

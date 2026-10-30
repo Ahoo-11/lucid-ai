@@ -2,7 +2,7 @@
 // gets exactly the columns it shows, the Run page gets the run and its steps.
 
 import { and, asc, count, desc, eq, gte, ilike, isNull, lt, max, or, sql, sum } from "drizzle-orm";
-import { Hono } from "hono";
+import { Hono, type MiddlewareHandler } from "hono";
 import { streamSSE } from "hono/streaming";
 import type { AppContext, AppEnv } from "../context";
 import { schema } from "../db";
@@ -44,26 +44,30 @@ const runListColumns = {
   metadata: runs.metadata,
 };
 
+/**
+ * Scopes a dashboard call to one project: the default one locally, the
+ * signed-in account's own one when hosted.
+ */
+export const requireProject = (ctx: AppContext): MiddlewareHandler<AppEnv> => async (c, next) => {
+  if (ctx.localMode) {
+    c.set("projectId", ctx.defaultProjectId);
+    return next();
+  }
+  // With Clerk, changes need the bearer token: the session cookie alone
+  // (which EventSource relies on) is only good for reading.
+  if (ctx.clerk && c.req.method !== "GET" && !c.req.header("authorization")) return c.json({ error: "Sign in required" }, 401);
+  const resolved = await resolveAccount(ctx, c);
+  if (resolved.status === "closed") return c.json({ error: CLOSED }, 403);
+  if (resolved.status === "signed-out") return c.json({ error: "Sign in required" }, 401);
+  c.set("projectId", resolved.account.projectId);
+  return next();
+};
+
 export function apiRoutes(ctx: AppContext) {
   const app = new Hono<AppEnv>();
   const { db } = ctx;
 
-  // Every dashboard call is scoped to one project: the default one locally,
-  // the signed-in account's own one when hosted.
-  app.use("*", async (c, next) => {
-    if (ctx.localMode) {
-      c.set("projectId", ctx.defaultProjectId);
-      return next();
-    }
-    // With Clerk, changes need the bearer token: the session cookie alone
-    // (which EventSource relies on) is only good for reading.
-    if (ctx.clerk && c.req.method !== "GET" && !c.req.header("authorization")) return c.json({ error: "Sign in required" }, 401);
-    const resolved = await resolveAccount(ctx, c);
-    if (resolved.status === "closed") return c.json({ error: CLOSED }, 403);
-    if (resolved.status === "signed-out") return c.json({ error: "Sign in required" }, 401);
-    c.set("projectId", resolved.account.projectId);
-    return next();
-  });
+  app.use("*", requireProject(ctx));
 
   app.route("/arena", arenaRoutes(ctx));
 

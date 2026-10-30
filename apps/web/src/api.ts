@@ -109,6 +109,11 @@ export type ConnectStatus = {
 
 export type ApiKey = { id: string; name: string; prefix: string; createdAt: string; lastUsedAt: string | null };
 
+/** A computer asking to connect, from the one-command installer. "taken": another account approved it. */
+export type DeviceLink =
+  | { code: string; status: "taken" }
+  | { code: string; status: "pending" | "approved" | "claimed" | "denied" | "expired"; machine: string; os: string | null; agents: string[]; expiresAt: string };
+
 export type ArenaModel = { id: string; name: string; inputPerMillion: number; outputPerMillion: number; contextLength: number | null };
 export type ToolCall = { id?: string; name: string; input?: unknown };
 export type Output = { text?: string; toolCalls?: ToolCall[] };
@@ -210,6 +215,10 @@ export const api = {
   keys: () => request<{ keys: ApiKey[] }>("/keys"),
   createKey: (name: string) => request<ApiKey & { key: string }>("/keys", { method: "POST", body: JSON.stringify({ name }) }),
   revokeKey: (id: string) => request<{ ok: true }>(`/keys/${id}`, { method: "DELETE" }),
+  links: {
+    get: (code: string) => request<DeviceLink>(`/links/${encodeURIComponent(code)}`),
+    decide: (code: string, decision: "approve" | "deny") => request<{ ok: true }>(`/links/${encodeURIComponent(code)}/${decision}`, { method: "POST", body: "{}" }),
+  },
   arena: {
     models: () => request<{ configured: boolean; models: ArenaModel[]; suggestedJudge: string | null }>("/arena/models"),
     check: (stepId: string) => request<{ ok: true; messages: number; tools: number } | { ok: false; reason: string }>(`/arena/check?step=${stepId}`),

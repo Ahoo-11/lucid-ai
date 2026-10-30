@@ -402,17 +402,17 @@ const SNIPPETS: Snippet[] = [
     id: "hermes",
     label: "Hermes Agent",
     brand: BRANDS.hermes,
-    title: "On the machine that runs Hermes",
-    code: (origin) => `curl -fsSL ${origin}/install/hermes.sh | LUCID_API_KEY=<lucid-key> sh`,
-    note: "Installs the Lucid plugin into Hermes. Events wait on disk while Lucid is unreachable and are sent later.",
+    title: "Where Hermes runs (Windows: irm …/connect.ps1 | iex)",
+    code: (origin) => `curl -fsSL ${origin}/connect.sh | sh`,
+    note: "Prints a link: click Approve and it installs the Lucid plugin. No key to copy. Events wait on disk while Lucid is unreachable.",
   },
   {
     id: "claude-code",
     label: "Claude Code",
     brand: BRANDS.claudeCode,
-    title: "Terminal",
-    code: (origin) => `git clone ${GITHUB_URL} && cd lucid-ai && npm install\nnpm run lucid -- connect claude-code --endpoint ${origin} --key <lucid-key>`,
-    note: "Adds hooks to ~/.claude/settings.json (backed up first). Undo it with disconnect claude-code.",
+    title: "Terminal (Windows: irm …/connect.ps1 | iex)",
+    code: (origin) => `curl -fsSL ${origin}/connect.sh | sh`,
+    note: "Prints a link: click Approve and it adds Lucid's hooks to Claude Code, backing up your settings first. No key to copy.",
   },
   {
     id: "otel",
@@ -863,7 +863,7 @@ const FAQ = [
   },
   {
     q: "Do I have to change my code?",
-    a: "Usually one line: the model's base URL. Hermes is one install command, Claude Code is one CLI command that adds hooks, and OpenTelemetry users set two environment variables.",
+    a: "Usually one line: the model's base URL. Claude Code and Hermes take one command and a click on Approve, with no key to copy. OpenTelemetry users set two environment variables.",
   },
   {
     q: "Does Lucid see my API keys?",

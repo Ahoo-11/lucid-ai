@@ -1,22 +1,23 @@
 // The connect wizard: pick your agent by its logo, pick the AI it calls when
-// that matters, then copy one snippet while Lucid listens for the first run.
+// that matters, then copy one snippet (or a prompt for the agent itself)
+// while Lucid listens for the first run.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, ArrowRight, Braces, Check, ChevronDown, KeyRound, Loader2, TriangleAlert, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Braces, Check, ChevronDown, Copy, KeyRound, Loader2, Sparkles, TriangleAlert, X } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { type ConnectStatus, api } from "../api";
-import { GITHUB_URL } from "../brand";
 import { BRANDS, type Brand, BrandMark } from "../landing/logos";
 import { cx } from "../ui";
 
-type Method = "proxy" | "hermes" | "claude-code" | "otel";
+/** device: one command plus a click on Approve (connect.sh / connect.ps1). */
+type Method = "device" | "proxy" | "otel";
 export type AgentChoice = { id: string; name: string; brand?: Brand; method: Method };
 
 /** Each agent goes the simplest way that captures it today. */
 const AGENT_CHOICES: AgentChoice[] = [
-  { id: "claude-code", name: "Claude Code", brand: BRANDS.claudeCode, method: "claude-code" },
-  { id: "hermes", name: "Hermes Agent", brand: BRANDS.hermes, method: "hermes" },
+  { id: "claude-code", name: "Claude Code", brand: BRANDS.claudeCode, method: "device" },
+  { id: "hermes", name: "Hermes Agent", brand: BRANDS.hermes, method: "device" },
   { id: "langgraph", name: "LangGraph", brand: BRANDS.langgraph, method: "proxy" },
   { id: "langchain", name: "LangChain", brand: BRANDS.langchain, method: "proxy" },
   { id: "crewai", name: "CrewAI", brand: BRANDS.crewai, method: "proxy" },
@@ -128,7 +129,8 @@ function Wizard({ initialAgent, newKey, onKey, close }: { initialAgent: AgentCho
     if (arrived) setStep("done");
   }, [arrived]);
 
-  // Hosted Lucid needs a key in every setup: make one as soon as it's needed.
+  // Hosted Lucid needs a key in the copy-paste setups: make one as soon as it's
+  // needed. The one-command setup gets its own when you approve the computer.
   const createKey = useMutation({
     mutationFn: (name: string) => api.createKey(name),
     onSuccess: (created) => {
@@ -136,7 +138,7 @@ function Wizard({ initialAgent, newKey, onKey, close }: { initialAgent: AgentCho
       void queryClient.invalidateQueries({ queryKey: ["keys"] });
     },
   });
-  const needsKey = step === "setup" && !!status.data && !status.data.localMode && !newKey;
+  const needsKey = step === "setup" && agent?.method !== "device" && !!status.data && !status.data.localMode && !newKey;
   const asked = useRef(false);
   useEffect(() => {
     if (needsKey && agent && !asked.current) {
@@ -350,10 +352,9 @@ function SetupStep({
         <Heading title={agent.id === "custom" ? "Connect your agent" : `Connect ${agent.name}`} sub={SUBTITLES[agent.method]} />
       </div>
 
-      {!target.keyless && <KeyNote created={!!newKey} state={keyState} onRetry={onRetryKey} />}
+      {!target.keyless && agent.method !== "device" && <KeyNote created={!!newKey} state={keyState} onRetry={onRetryKey} />}
 
-      {agent.method === "claude-code" && <ClaudeCodeSetup target={target} />}
-      {agent.method === "hermes" && <HermesSetup target={target} />}
+      {agent.method === "device" && <DeviceSetup target={target} agent={agent} />}
       {agent.method === "proxy" && <ProxySetup target={target} provider={provider} agent={agent} onUseOtel={onUseOtel} />}
       {agent.method === "otel" && <OtelSetup target={target} agent={agent} />}
     </>
@@ -361,8 +362,7 @@ function SetupStep({
 }
 
 const SUBTITLES: Record<Method, string> = {
-  "claude-code": "One command, then use Claude Code as usual.",
-  hermes: "One command where Hermes runs.",
+  device: "One command, then click Approve. No keys to copy.",
   proxy: "Change one setting. Your code stays the same.",
   otel: "Send the traces it already makes to Lucid.",
 };
@@ -532,100 +532,120 @@ const LoopbackWarning = ({ target }: { target: Target }) =>
     </Callout>
   ) : null;
 
-/** The CLI already defaults to this machine's server, so only other endpoints need the flag. */
-function cliFlags(target: Target) {
-  const isLocalDefault = /^http:\/\/(localhost|127\.0\.0\.1):4318$/.test(target.endpoint);
-  return [!isLocalDefault && `--endpoint ${target.endpoint}`, !target.keyless && `--key ${target.key}`].filter(Boolean).join(" ");
-}
-
 const lines = (...parts: (string | false)[]) =>
   parts
     .filter(Boolean)
     .map((line) => (line as string).trim())
     .join("\n");
 
-// ---------------------------------------------------------------------------
-// Claude Code
-
-function ClaudeCodeSetup({ target }: { target: Target }) {
-  const flags = cliFlags(target);
-  const code = lines(
-    !target.local && `git clone ${GITHUB_URL} && cd lucid-ai && npm install`,
-    `npm run lucid -- connect claude-code ${flags}`,
-    `npm run lucid -- import claude-code --days 7 ${flags}`,
-  );
+/** A prompt to paste into the agent itself, so it does the setup. */
+function AskAgent({ title, sub, prompt, note }: { title: string; sub: string; prompt: string; note?: string }) {
+  const [copied, setCopied] = useState(false);
   return (
-    <>
-      <Instructions>
-        <Instruction n={1} title={target.local ? "In the Lucid folder, run this" : "Open a terminal and paste this"}>
-          <Snippet label={target.local ? "Lucid folder" : "Terminal · needs git and Node.js"} code={code} />
-        </Instruction>
-        <Instruction n={2} title="Use Claude Code as usual">
-          <Fine>Every session shows up here as it happens. Your last 7 days come in too, so there's something to look at right away.</Fine>
-        </Instruction>
-      </Instructions>
-      <More title="What this changes">
-        <Fine>
-          It adds hooks to <Mono>~/.claude/settings.json</Mono> and keeps a backup. To undo it, run <Mono>npm run lucid -- disconnect claude-code</Mono>.
-        </Fine>
-      </More>
-    </>
+    <div className="mt-6 rounded-2xl bg-zinc-50 p-4 ring-1 ring-zinc-200 dark:bg-white/[0.03] dark:ring-white/10">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
+        <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-brand-300 text-zinc-950">
+          <Sparkles className="size-5" />
+        </span>
+        <div className="min-w-0 flex-1 basis-48">
+          <div className="font-semibold">{title}</div>
+          <p className="text-sm text-zinc-500 dark:text-zinc-400">{sub}</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            void navigator.clipboard.writeText(prompt).then(() => {
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1_500);
+            });
+          }}
+          className={cx(
+            "inline-flex shrink-0 items-center gap-1.5 rounded-full px-4 py-2 text-sm font-semibold transition",
+            copied ? "bg-emerald-500 text-white" : "bg-zinc-900 text-white hover:bg-zinc-700 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-200",
+          )}
+        >
+          {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
+          {copied ? "Copied" : "Copy prompt"}
+        </button>
+      </div>
+      <details className="group mt-3">
+        <summary className="cursor-pointer list-none text-xs font-medium text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white [&::-webkit-details-marker]:hidden">
+          <span className="group-open:hidden">Show the prompt</span>
+          <span className="hidden group-open:inline">Hide the prompt</span>
+        </summary>
+        <pre className="mt-2 rounded-xl bg-white p-3 font-sans text-xs leading-relaxed whitespace-pre-wrap text-zinc-600 ring-1 ring-zinc-200 [overflow-wrap:anywhere] dark:bg-zinc-950 dark:text-zinc-300 dark:ring-white/10">{prompt}</pre>
+      </details>
+      {note && <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">{note}</p>}
+    </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Hermes
+// Claude Code and Hermes: one command, then Approve
 
-type HermesWhere = "server" | "docker" | "here";
+type Os = "mac" | "windows" | "linux";
 
-function HermesSetup({ target }: { target: Target }) {
-  const [picked, setWhere] = useState<HermesWhere | null>(null);
-  const where = picked ?? (target.local ? "here" : "server");
-  const env = [!target.keyless && `LUCID_API_KEY=${target.key}`, "LUCID_BACKFILL_DAYS=30"].filter(Boolean).join(" ");
-  const install = `curl -fsSL ${target.endpoint}/install/hermes.sh | ${env} sh`;
-  const flags = cliFlags(target);
-  const code =
-    where === "here"
-      ? lines(`npm run lucid -- connect hermes ${flags}`, `npm run lucid -- import hermes --days 30 ${flags}`)
-      : where === "docker"
-        ? `docker exec <hermes-container> sh -c '${install}'\ndocker restart <hermes-container>`
-        : install;
-  const options: { id: HermesWhere; label: string }[] = target.local
-    ? [
-        { id: "here", label: "This computer" },
-        { id: "server", label: "A server" },
-        { id: "docker", label: "Docker" },
-      ]
-    : [
-        { id: "server", label: "Mac, Linux or a server" },
-        { id: "docker", label: "Docker" },
-      ];
+function detectOs(): Os {
+  const nav = navigator as Navigator & { userAgentData?: { platform?: string } };
+  const platform = (nav.userAgentData?.platform || nav.platform || nav.userAgent).toLowerCase();
+  return platform.includes("win") ? "windows" : platform.includes("mac") ? "mac" : "linux";
+}
+
+const connectCommand = (target: Target, os: Os) => (os === "windows" ? `irm ${target.endpoint}/connect.ps1 | iex` : `curl -fsSL ${target.endpoint}/connect.sh | sh`);
+
+function devicePrompt(target: Target) {
+  return `Connect yourself to Lucid, an observability tool, so I can see your runs.
+
+1. Run this in a terminal on this computer:
+   macOS or Linux: ${connectCommand(target, "mac")}
+   Windows (PowerShell): ${connectCommand(target, "windows")}
+   It waits up to 10 minutes for my approval, so run it in the background if your terminal tool has a time limit.
+2. It prints a link and a code. Show me both right away so I can click Approve.
+3. When it finishes, tell me what it connected and that I need to restart you.`;
+}
+
+function DeviceSetup({ target, agent }: { target: Target; agent: AgentChoice }) {
+  const [os, setOs] = useState<Os>(detectOs);
+  const hermes = agent.id === "hermes";
+  const short = hermes ? "Hermes" : "Claude Code";
   return (
     <>
       <Instructions>
-        <Instruction n={1} title={where === "here" ? "In the Lucid folder, run this" : where === "docker" ? "On the Docker host, run this" : "Paste this where Hermes runs"}>
-          <Segmented label="Where Hermes runs" value={where} onChange={setWhere} options={options} />
-          <Snippet label={where === "here" ? "Lucid folder" : where === "docker" ? "Docker host" : "Terminal, as the user that runs Hermes"} code={code} />
+        <Instruction n={1} title={os === "windows" ? "Open PowerShell and paste this" : os === "mac" ? "Open Terminal and paste this" : `Paste this where ${short} runs`}>
+          <Segmented
+            label="Computer"
+            value={os}
+            onChange={setOs}
+            options={[
+              { id: "mac", label: "Mac" },
+              { id: "windows", label: "Windows" },
+              { id: "linux", label: "Linux or a server" },
+            ]}
+          />
+          <Snippet label={os === "windows" ? "PowerShell" : "Terminal"} code={connectCommand(target, os)} />
         </Instruction>
-        <Instruction n={2} title={where === "docker" ? "Use Hermes as usual" : "Restart Hermes"}>
-          <Fine>Every chat shows up here from now on, plus your last 30 days.</Fine>
+        <Instruction n={2} title="Click Approve on the page it opens">
+          <Fine>{os === "linux" ? "On a server, open the link it prints on any device where you're signed in." : "Check that the code on the page matches the one in your terminal."}</Fine>
+        </Instruction>
+        <Instruction n={3} title={hermes ? "Restart Hermes" : "Start a new Claude Code session"}>
+          <Fine>{hermes ? "Every chat shows up here from then on, plus your last 30 days." : "Every session shows up here as it happens, plus your last 7 days."}</Fine>
         </Instruction>
       </Instructions>
-      {where !== "here" && <LoopbackWarning target={target} />}
+      <AskAgent title={`Or let ${short} do it`} sub={`Paste this into ${short}. It runs the command and shows you the link to approve.`} prompt={devicePrompt(target)} />
+      {hermes && (
+        <More title="Hermes runs in Docker?">
+          <Fine>Run the command inside the container, then restart it. Replace the name with your container's.</Fine>
+          <Snippet label="Docker host" code={`docker exec -it hermes sh -c "${connectCommand(target, "linux")}"\ndocker restart hermes`} />
+        </More>
+      )}
       <More title="What this changes">
         <Fine>
-          {where === "here" ? (
-            <>
-              It copies the plugin into Hermes' <Mono>plugins/lucid</Mono> folder and enables it, then reads your past chats from Hermes' <Mono>state.db</Mono> without changing it.
-            </>
-          ) : (
-            <>
-              It installs the plugin into Hermes' <Mono>plugins/lucid</Mono> folder, adds the <Mono>LUCID_*</Mono> settings to Hermes' <Mono>.env</Mono> and enables it. Run it again any time to update. If Lucid
-              can't be reached, events wait on disk and are sent later.
-            </>
-          )}
+          The command looks for Claude Code and Hermes Agent on that computer and connects each one it finds, after you approve. Claude Code gets hooks in <Mono>~/.claude/settings.json</Mono> (a backup is kept) and a
+          small helper in <Mono>~/.lucid</Mono>; it needs Node.js 18 or newer. Hermes gets the Lucid plugin in its <Mono>plugins</Mono> folder and three <Mono>LUCID_</Mono> settings in its <Mono>.env</Mono>. Run it
+          again any time to update.
         </Fine>
       </More>
+      {os === "linux" && <LoopbackWarning target={target} />}
     </>
   );
 }
@@ -682,6 +702,17 @@ const LABEL_HEADERS: { name: string; what: string }[] = [
   { name: "x-lucid-user", what: "Your end user's id, to find their runs later." },
 ];
 
+function proxyPrompt(agent: AgentChoice, label: string, base: string, envLines: string) {
+  const what = agent.id === "custom" ? "this project's" : `this ${agent.name} project's`;
+  return `Route ${what} ${label} calls through Lucid, an observability tool, so its runs get recorded.
+
+- Point the ${label} client at this base URL: ${base}
+  If the client reads its settings from the environment, add this to the project's .env instead:
+  ${envLines.split("\n").join("\n  ")}
+- Keep the existing ${label} API key exactly as it is.
+- Don't change anything else. Then tell me what you changed and how to run it once.`;
+}
+
 function ProxySetup({ target, provider, agent, onUseOtel }: { target: Target; provider: string; agent: AgentChoice; onUseOtel: () => void }) {
   const [lang, setLang] = useState<Lang>("env");
   const base = proxyBase(target, provider);
@@ -712,6 +743,12 @@ function ProxySetup({ target, provider, agent, onUseOtel }: { target: Target; pr
           </Fine>
         </Instruction>
       </Instructions>
+      <AskAgent
+        title="Or let your coding agent do it"
+        sub="Paste this into Claude Code, Cursor or Codex, opened in your project."
+        prompt={proxyPrompt(agent, label, base, proxySnippet("env", provider, base))}
+        note={target.keyless ? undefined : "The prompt includes your Lucid key, as the .env line does."}
+      />
       {agent.id === "langgraph" && (
         <Callout>
           Want each step of the graph, not just the model calls?{" "}

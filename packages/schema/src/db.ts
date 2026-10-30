@@ -74,6 +74,28 @@ export const apiKeys = pgTable("api_keys", {
   revokedAt: ts("revoked_at"),
 });
 
+/**
+ * "Run one command, click Approve": a computer asking to send to a project.
+ * The installer polls with a secret device code; the person approves the
+ * short user code in the dashboard, and the next poll receives a fresh key.
+ */
+export const deviceLinks = pgTable("device_links", {
+  id: text("id").primaryKey(),
+  /** What people compare and type: "WXYZ-2345". */
+  userCode: text("user_code").notNull().unique(),
+  /** Hash of the secret only the installer knows. */
+  deviceCodeHash: text("device_code_hash").notNull().unique(),
+  machine: text("machine").notNull(),
+  os: text("os"),
+  agents: jsonb("agents").$type<string[]>().notNull(),
+  /** pending → approved → claimed, or denied. */
+  status: text("status").notNull().default("pending"),
+  /** Set on approval: the project the key is made for. */
+  projectId: text("project_id").references(() => projects.id, { onDelete: "cascade" }),
+  expiresAt: ts("expires_at").notNull(),
+  createdAt: createdAt(),
+});
+
 /** Every payload exactly as received, so improved normalizers can reprocess history. */
 export const rawEvents = pgTable(
   "raw_events",

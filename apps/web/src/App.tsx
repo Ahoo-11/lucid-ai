@@ -9,6 +9,7 @@ import { PasswordSignIn, Splash, Unreachable } from "./pages/SignIn";
 import { Arena, ExperimentPage, NewExperiment } from "./pages/Arena";
 import { Connect } from "./pages/Connect";
 import { Inbox, isRecurring } from "./pages/Inbox";
+import { LinkPage } from "./pages/Link";
 import { RunPage } from "./pages/Run";
 import { Runs } from "./pages/Runs";
 import { cx } from "./ui";
@@ -124,6 +125,7 @@ function Shell({ account }: { account: ReactNode }) {
           <Route path="/arena/new" element={<NewExperiment />} />
           <Route path="/arena/:id" element={<ExperimentPage />} />
           <Route path="/connect" element={<Connect />} />
+          <Route path="/link" element={<LinkPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>

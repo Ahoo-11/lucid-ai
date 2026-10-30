@@ -109,7 +109,8 @@ function logHookError(error: unknown) {
 async function readStdin() {
   const chunks: Buffer[] = [];
   for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
-  return Buffer.concat(chunks).toString("utf8");
+  // Windows PowerShell puts a byte-order mark in front of text it pipes in.
+  return Buffer.concat(chunks).toString("utf8").replace(/^﻿/, "");
 }
 
 /** Runs inside a Claude Code hook: must be quick, quiet, and never fail the session. */
