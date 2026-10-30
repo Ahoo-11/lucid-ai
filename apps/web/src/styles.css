@@ -1,8 +1,54 @@
+/* Clerk's styles go in their own layer, under Tailwind's utilities, so classes can restyle its components. */
+@layer theme, base, clerk, components, utilities;
 @import "tailwindcss";
 
+/* Dark follows the system, or is forced for a subtree with class="dark" (the sign-in screens). */
+@custom-variant dark {
+  @media (prefers-color-scheme: dark) {
+    @slot;
+  }
+  &:where(.dark, .dark *) {
+    @slot;
+  }
+}
+
 @theme {
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --font-mono: ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
+  --font-display: "Bricolage Grotesque Variable", "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+
+  /* Lucid lime. Fills (300/400) take dark text; text on white uses 700 or darker. */
+  --color-brand-50: #fbffe6;
+  --color-brand-100: #f4ffc2;
+  --color-brand-200: #e8fe8a;
+  --color-brand-300: #d8f84a;
+  --color-brand-400: #c4ea1f;
+  --color-brand-500: #a6cd09;
+  --color-brand-600: #80a104;
+  --color-brand-700: #617a09;
+  --color-brand-800: #4e610e;
+  --color-brand-900: #415211;
+  --color-brand-950: #222e03;
+}
+
+/* Landing page motion; every use is behind motion-safe. */
+@keyframes draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes trace {
+  to {
+    stroke-dashoffset: -480;
+  }
+}
+@keyframes orbit {
+  to {
+    rotate: 360deg;
+  }
 }
 
 html,
@@ -45,5 +91,5 @@ body {
   @apply border-b border-zinc-200 px-2 py-1 dark:border-zinc-800;
 }
 .prose-lucid a {
-  @apply text-violet-600 underline dark:text-violet-400;
+  @apply text-brand-700 underline dark:text-brand-300;
 }

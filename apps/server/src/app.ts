@@ -2,11 +2,11 @@ import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { sql } from "drizzle-orm";
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import { authRoutes } from "./auth";
 import type { AppContext } from "./context";
 import { createIngest } from "./ingestService";
-import { installRoutes } from "./install";
+import { SAFE_URL, installRoutes, publicEndpoint } from "./install";
 import { proxyRoutes } from "./proxy";
 import { apiRoutes } from "./routes/api";
 import { ingestRoutes } from "./routes/ingest";
@@ -38,8 +38,17 @@ export function createApp(ctx: AppContext) {
   // serves it and proxies /api and /v1 here.
   if (existsSync(WEB_DIST)) {
     const index = readFileSync(`${WEB_DIST}/index.html`, "utf8");
+    // Link previews need absolute URLs. The origin can come from request
+    // headers, so only a plain URL goes into the page; otherwise they stay relative.
+    const page = (c: Context) => {
+      const origin = publicEndpoint(c);
+      return c.html(index.replaceAll("__LUCID_ORIGIN__", SAFE_URL.test(origin) ? origin : ""));
+    };
+    // Before serveStatic, which would send index.html for "/" as it is.
+    app.get("/", page);
+    app.get("/index.html", page);
     app.use("/*", serveStatic({ root: WEB_DIST }));
-    app.get("*", (c) => c.html(index));
+    app.get("*", page);
   }
   return app;
 }

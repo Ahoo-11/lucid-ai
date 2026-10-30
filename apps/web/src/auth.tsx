@@ -5,7 +5,9 @@
 import { ClerkFailed, ClerkLoading, ClerkProvider, Show, SignIn, SignOutButton, useAuth } from "@clerk/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useSyncExternalStore } from "react";
+import { useLocation } from "react-router";
 import { type Me, api, setTokenSource } from "./api";
+import { Landing } from "./landing/Landing";
 import { AuthLayout, Splash } from "./pages/SignIn";
 import { Card } from "./ui";
 
@@ -17,30 +19,40 @@ const subscribe = (onChange: () => void) => {
 };
 const useDark = () => useSyncExternalStore(subscribe, () => matchMedia(DARK).matches);
 
-const FONT = 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
+const FONT = '"Geist Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
 
-/** Clerk's components in Lucid's colors (zinc + violet) and font, following the system theme. */
+const SHARED = { fontFamily: FONT, borderRadius: "0.625rem" };
+
+const DARK_COLORS = {
+  ...SHARED,
+  colorPrimary: "#d8f84a",
+  colorPrimaryForeground: "#09090b",
+  colorBackground: "#18181b",
+  colorForeground: "#fafafa",
+  colorMutedForeground: "#a1a1aa",
+  colorNeutral: "#fafafa",
+  colorInput: "#09090b",
+  colorInputForeground: "#fafafa",
+  colorBorder: "#27272a",
+  colorRing: "#d8f84a",
+  colorDanger: "#f43f5e",
+  colorSuccess: "#10b981",
+};
+
+/**
+ * Clerk's components in the app (the account menu) in Lucid's colors and font,
+ * following the system theme. Primary is near-black in light mode: Clerk colors
+ * its links with it too, and lime text is unreadable on white.
+ */
 function appearance(dark: boolean) {
-  const shared = { fontFamily: FONT, borderRadius: "0.625rem" };
   return {
+    // Under Tailwind's utilities (see styles.css), so classes can restyle Clerk.
+    cssLayerName: "clerk",
     variables: dark
-      ? {
-          ...shared,
-          colorPrimary: "#8b5cf6",
-          colorPrimaryForeground: "#ffffff",
-          colorBackground: "#18181b",
-          colorForeground: "#fafafa",
-          colorMutedForeground: "#a1a1aa",
-          colorNeutral: "#fafafa",
-          colorInput: "#09090b",
-          colorInputForeground: "#fafafa",
-          colorBorder: "#27272a",
-          colorDanger: "#f43f5e",
-          colorSuccess: "#10b981",
-        }
+      ? DARK_COLORS
       : {
-          ...shared,
-          colorPrimary: "#7c3aed",
+          ...SHARED,
+          colorPrimary: "#18181b",
           colorPrimaryForeground: "#ffffff",
           colorBackground: "#ffffff",
           colorForeground: "#18181b",
@@ -52,9 +64,32 @@ function appearance(dark: boolean) {
           colorDanger: "#e11d48",
           colorSuccess: "#059669",
         },
-    elements: { rootBox: "w-full flex justify-center", cardBox: "shadow-xl shadow-zinc-950/5 dark:shadow-black/40" },
   };
 }
+
+/** The sign-in card sits on the always-dark sign-in screen and matches Lucid's own (AuthCard). */
+const SIGN_IN_APPEARANCE = {
+  variables: { ...DARK_COLORS, colorBackground: "#141416", borderRadius: "0.75rem" },
+  elements: {
+    rootBox: "w-full flex justify-center",
+    cardBox:
+      "relative w-full max-w-[400px] rounded-2xl border-0 shadow-2xl shadow-black/50 ring-1 ring-white/10 before:absolute before:inset-x-10 before:top-0 before:z-10 before:h-px before:bg-linear-to-r before:from-transparent before:via-brand-300/70 before:to-transparent",
+    headerTitle: "font-display text-3xl font-bold tracking-tight",
+    headerSubtitle: "text-zinc-400",
+    socialButtonsBlockButton: "h-11 rounded-full border-0 bg-white shadow-none ring-0 hover:bg-zinc-200",
+    socialButtonsBlockButtonText: "text-sm font-semibold text-zinc-900",
+    dividerLine: "bg-white/10",
+    dividerText: "text-zinc-500",
+    formFieldLabel: "text-zinc-300",
+    formFieldInput: "h-11 rounded-xl border-0 bg-zinc-950 shadow-none ring-1 ring-white/10 hover:ring-white/20 focus:ring-2 focus:ring-brand-300/60",
+    formButtonPrimary: "h-11 rounded-full bg-brand-300 font-semibold text-zinc-950 shadow-[0_10px_40px_-12px_rgba(216,248,74,0.6)] hover:bg-brand-200",
+    footerActionLink: "font-medium text-brand-300 hover:text-brand-200",
+  },
+};
+
+const LOCALIZATION = {
+  signIn: { start: { titleCombined: "Welcome to Lucid", subtitleCombined: "Sign in or create your account. Free while in beta." } },
+};
 
 /**
  * Gives every API call the current session token, and drops cached data
@@ -115,28 +150,43 @@ function Retry({ onRetry }: { onRetry: () => void }) {
   return <Splash />;
 }
 
+/**
+ * Clerk's __client_uat cookie holds the last sign-in time, or 0 when signed
+ * out. Good enough to show new visitors the landing page while Clerk loads.
+ */
+const maybeSignedIn = () => /(?:^|;\s*)__client_uat(?:_[\w-]+)?=[1-9]/.test(document.cookie);
+
 export function ClerkGate({ publishableKey, signups, children }: { publishableKey: string; signups: boolean; children: (me: Me) => ReactNode }) {
   const dark = useDark();
-  // After signing in, come back to the page that was asked for.
-  const here = `${window.location.pathname}${window.location.search}`;
+  const { pathname, search } = useLocation();
+  // Signed-out visitors to "/" get the landing page; every other page asks them to sign in.
+  const atLanding = pathname === "/";
+  // After signing in, come back to the page that was asked for (from /sign-in, the app).
+  const here = pathname === "/sign-in" ? "/" : `${pathname}${search}`;
   return (
-    <ClerkProvider publishableKey={publishableKey} appearance={appearance(dark)}>
+    <ClerkProvider publishableKey={publishableKey} appearance={appearance(dark)} localization={LOCALIZATION}>
       <SessionBridge />
-      <ClerkLoading>
-        <Splash />
-      </ClerkLoading>
+      <ClerkLoading>{atLanding && !maybeSignedIn() ? <Landing /> : <Splash />}</ClerkLoading>
       <ClerkFailed>
-        <AuthLayout>
-          <Card className="w-full max-w-sm space-y-2 p-6 text-center">
-            <h2 className="font-semibold">Sign-in didn't load</h2>
-            <p className="text-sm text-zinc-500 dark:text-zinc-400">Something blocked the sign-in service (an ad blocker or a network filter). Allow it and reload.</p>
-          </Card>
-        </AuthLayout>
+        {atLanding ? (
+          <Landing />
+        ) : (
+          <AuthLayout>
+            <Card className="w-full max-w-sm space-y-2 p-6 text-center">
+              <h2 className="font-semibold">Sign-in didn't load</h2>
+              <p className="text-sm text-zinc-500 dark:text-zinc-400">Something blocked the sign-in service (an ad blocker or a network filter). Allow it and reload.</p>
+            </Card>
+          </AuthLayout>
+        )}
       </ClerkFailed>
       <Show when="signed-out">
-        <AuthLayout>
-          <SignIn routing="hash" withSignUp={signups} fallbackRedirectUrl={here} signUpFallbackRedirectUrl={here} />
-        </AuthLayout>
+        {atLanding ? (
+          <Landing />
+        ) : (
+          <AuthLayout>
+            <SignIn routing="hash" withSignUp={signups} fallbackRedirectUrl={here} signUpFallbackRedirectUrl={here} appearance={SIGN_IN_APPEARANCE} />
+          </AuthLayout>
+        )}
       </Show>
       <Show when="signed-in">
         <Account>{children}</Account>

@@ -56,13 +56,13 @@ export function StatusPill({ status, errorCount = 0 }: { status: Status; errorCo
 }
 
 const KINDS: Record<StepKind, { icon: typeof Sparkles; label: string; color: string; bg: string }> = {
-  llm: { icon: Sparkles, label: "Model call", color: "text-violet-600 dark:text-violet-400", bg: "bg-violet-50 dark:bg-violet-500/10" },
+  llm: { icon: Sparkles, label: "Model call", color: "text-brand-700 dark:text-brand-300", bg: "bg-brand-50 dark:bg-brand-400/10" },
   tool: { icon: Wrench, label: "Tool", color: "text-sky-600 dark:text-sky-400", bg: "bg-sky-50 dark:bg-sky-500/10" },
   agent: { icon: Bot, label: "Sub-agent", color: "text-teal-600 dark:text-teal-400", bg: "bg-teal-50 dark:bg-teal-500/10" },
   handoff: { icon: ArrowRightLeft, label: "Handoff", color: "text-teal-600 dark:text-teal-400", bg: "bg-teal-50 dark:bg-teal-500/10" },
   guardrail: { icon: Shield, label: "Guardrail", color: "text-amber-600 dark:text-amber-400", bg: "bg-amber-50 dark:bg-amber-500/10" },
   retrieval: { icon: Search, label: "Retrieval", color: "text-indigo-600 dark:text-indigo-400", bg: "bg-indigo-50 dark:bg-indigo-500/10" },
-  decision: { icon: GitBranch, label: "Decision", color: "text-violet-600 dark:text-violet-400", bg: "bg-violet-50 dark:bg-violet-500/10" },
+  decision: { icon: GitBranch, label: "Decision", color: "text-brand-700 dark:text-brand-300", bg: "bg-brand-50 dark:bg-brand-400/10" },
   event: { icon: Circle, label: "Step", color: "text-zinc-500", bg: "bg-zinc-100 dark:bg-zinc-800" },
   error: { icon: AlertTriangle, label: "Error", color: "text-rose-600 dark:text-rose-400", bg: "bg-rose-50 dark:bg-rose-500/10" },
 };
@@ -146,7 +146,7 @@ export function Chip({ children, active, title }: { children: ReactNode; active?
       title={title}
       className={cx(
         "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-[11px]",
-        active ? "bg-violet-600 text-white dark:bg-violet-500" : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300",
+        active ? "bg-brand-300 text-zinc-950" : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300",
       )}
     >
       {children}

@@ -75,7 +75,7 @@ export function Connect() {
             className={cx(
               "rounded-xl border p-3 text-left transition-colors",
               t.id === type
-                ? "border-violet-400 bg-violet-50 ring-1 ring-violet-400 dark:border-violet-500 dark:bg-violet-500/10 dark:ring-violet-500"
+                ? "border-brand-500 bg-brand-50 ring-1 ring-brand-500 dark:border-brand-400 dark:bg-brand-400/10 dark:ring-brand-400"
                 : "border-zinc-200 bg-white hover:border-zinc-300 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:border-zinc-700",
             )}
           >
@@ -84,7 +84,7 @@ export function Connect() {
               {t.title}
             </div>
             <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{t.blurb}</p>
-            {t.badge && <span className="mt-2 inline-block rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-medium text-violet-700 dark:bg-violet-500/15 dark:text-violet-300">{t.badge}</span>}
+            {t.badge && <span className="mt-2 inline-block rounded-full bg-brand-100 px-2 py-0.5 text-[11px] font-medium text-brand-800 dark:bg-brand-400/15 dark:text-brand-300">{t.badge}</span>}
           </button>
         ))}
       </div>
@@ -115,7 +115,7 @@ function LiveStatus({ data }: { data: Awaited<ReturnType<typeof api.connect>> | 
             <>
               Last event {ago(last)} via{" "}
               {data!.sources.map((s) => `${s.harness && s.harness !== s.source ? `${harnessLabel(s.harness)} ` : ""}${SOURCE_LABELS[s.source] ?? s.source}`).join(", ")}.{" "}
-              <Link to="/runs" className="text-violet-600 underline dark:text-violet-400">
+              <Link to="/runs" className="text-brand-700 underline dark:text-brand-300">
                 See runs
               </Link>
             </>
@@ -324,7 +324,7 @@ function ProxyPanel({ target, providers }: { target: Target; providers: string[]
         <ul className="space-y-1 text-sm">
           {LABEL_HEADERS.map((h) => (
             <li key={h.name} className="flex flex-col gap-0.5 sm:flex-row sm:gap-3">
-              <code className="w-36 shrink-0 font-mono text-xs leading-5 text-violet-700 dark:text-violet-300">{h.name}</code>
+              <code className="w-36 shrink-0 font-mono text-xs leading-5 text-brand-800 dark:text-brand-300">{h.name}</code>
               <span className="text-zinc-600 dark:text-zinc-400">{h.what}</span>
             </li>
           ))}

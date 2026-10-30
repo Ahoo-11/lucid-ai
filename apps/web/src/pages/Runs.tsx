@@ -63,7 +63,7 @@ export function Runs() {
             value={q}
             onChange={(event) => setParam("q", event.target.value)}
             placeholder="Search requests and answers…"
-            className="w-full rounded-lg border border-zinc-200 bg-white py-2 pr-3 pl-9 text-sm outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-400/20 dark:border-zinc-800 dark:bg-zinc-900"
+            className="w-full rounded-lg border border-zinc-200 bg-white py-2 pr-3 pl-9 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-400/30 dark:border-zinc-800 dark:bg-zinc-900"
           />
         </label>
         <div className="flex rounded-lg border border-zinc-200 bg-white p-0.5 dark:border-zinc-800 dark:bg-zinc-900">
@@ -106,7 +106,7 @@ export function Runs() {
               "Try clearing the search or filters."
             ) : (
               <>
-                Connect an agent and its runs show up here live. <Link to="/connect" className="text-violet-600 underline">Connect one</Link>.
+                Connect an agent and its runs show up here live. <Link to="/connect" className="text-brand-700 underline">Connect one</Link>.
               </>
             )}
           </Empty>

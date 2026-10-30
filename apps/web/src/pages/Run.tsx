@@ -170,7 +170,7 @@ function Expandable({ text, lines = 6 }: { text: string; lines?: number }) {
         <Prose text={text} />
       </div>
       {long && (
-        <button type="button" onClick={() => setOpen(!open)} className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-violet-600 dark:text-violet-400">
+        <button type="button" onClick={() => setOpen(!open)} className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-brand-700 dark:text-brand-300">
           {open ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
           {open ? "Show less" : "Show all"}
         </button>
@@ -232,7 +232,7 @@ function StepButton({ step, selected, onSelect, children, meta }: { step: Step; 
       onClick={() => onSelect(step.externalId)}
       className={cx(
         "flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-sm transition-colors",
-        selected ? "bg-violet-50 ring-1 ring-violet-300 dark:bg-violet-500/10 dark:ring-violet-500/40" : "hover:bg-zinc-50 dark:hover:bg-zinc-800/50",
+        selected ? "bg-brand-50 ring-1 ring-brand-400 dark:bg-brand-400/10 dark:ring-brand-400/40" : "hover:bg-zinc-50 dark:hover:bg-zinc-800/50",
       )}
     >
       <KindIcon kind={step.kind} failed={step.status === "error"} size="sm" />
@@ -558,7 +558,7 @@ function Messages({ messages }: { messages: { role: string; content: unknown }[]
   const [open, setOpen] = useState(false);
   return (
     <div>
-      <button type="button" onClick={() => setOpen(!open)} className="inline-flex items-center gap-1 text-xs font-medium text-violet-600 dark:text-violet-400">
+      <button type="button" onClick={() => setOpen(!open)} className="inline-flex items-center gap-1 text-xs font-medium text-brand-700 dark:text-brand-300">
         {open ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
         {open ? "Hide" : "Show"} the {plural(messages.length, "message")} sent to the model
       </button>
@@ -625,7 +625,7 @@ function TryInArena({ step }: { step: Step }) {
   const check = useQuery({ queryKey: ["arena", "check", step.id], queryFn: () => api.arena.check(step.id), staleTime: 60_000 });
   const body = (
     <>
-      <FlaskConical className="size-4 shrink-0 text-violet-600 dark:text-violet-400" />
+      <FlaskConical className="size-4 shrink-0 text-brand-700 dark:text-brand-300" />
       <span>
         <span className="font-medium">Try this decision with another model or prompt</span>
         <span className="block text-xs text-zinc-500">
@@ -640,7 +640,7 @@ function TryInArena({ step }: { step: Step }) {
   return (
     <Link
       to={`/arena/new?step=${step.id}&run=${step.runId}`}
-      className="flex items-center gap-3 rounded-lg border border-dashed border-violet-300 p-3 text-sm hover:bg-violet-50 dark:border-violet-500/40 dark:hover:bg-violet-500/10"
+      className="flex items-center gap-3 rounded-lg border border-dashed border-brand-400 p-3 text-sm hover:bg-brand-50 dark:border-brand-400/40 dark:hover:bg-brand-400/10"
     >
       {body}
     </Link>

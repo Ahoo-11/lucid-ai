@@ -26,7 +26,7 @@ export function Inbox() {
       ) : issues.length === 0 ? (
         <Card>
           <Empty icon={<CheckCircle2 className="size-8 text-emerald-500" />} title="Nothing to fix right now">
-            Failed tool calls, API errors and blocked actions show up here, grouped by cause, with a suggested fix. <Link to="/runs" className="text-violet-600 underline">See all runs</Link>.
+            Failed tool calls, API errors and blocked actions show up here, grouped by cause, with a suggested fix. <Link to="/runs" className="text-brand-700 underline">See all runs</Link>.
           </Empty>
         </Card>
       ) : (

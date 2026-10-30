@@ -1,9 +1,10 @@
 import { UserButton } from "@clerk/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import { NavLink, Navigate, Route, Routes } from "react-router";
+import { NavLink, Navigate, Route, Routes, useLocation } from "react-router";
 import { api, useLiveUpdates } from "./api";
 import { ClerkGate } from "./auth";
+import { Landing } from "./landing/Landing";
 import { PasswordSignIn, Splash, Unreachable } from "./pages/SignIn";
 import { Arena, ExperimentPage, NewExperiment } from "./pages/Arena";
 import { Connect } from "./pages/Connect";
@@ -38,11 +39,14 @@ function Tab({ to, children, badge }: { to: string; children: string; badge?: nu
 }
 
 /**
- * Hosted Lucid asks who you are first (Clerk, or built-in email + password);
- * local Lucid goes straight in.
+ * Hosted Lucid asks who you are first (Clerk, or built-in email + password)
+ * and shows signed-out visitors to "/" the landing page; local Lucid goes
+ * straight in. /landing always shows the landing page.
  */
 export function App() {
+  const { pathname } = useLocation();
   const config = useQuery({ queryKey: ["auth-config"], queryFn: api.auth.config, staleTime: Number.POSITIVE_INFINITY, retry: 2 });
+  if (pathname === "/landing") return <Landing />;
   if (config.isPending) return <Splash />;
   if (config.isError) return <Unreachable onRetry={() => void config.refetch()} />;
   const { provider, publishableKey, signups } = config.data;
@@ -57,9 +61,10 @@ export function App() {
 }
 
 function BuiltInGate() {
+  const { pathname } = useLocation();
   const me = useQuery({ queryKey: ["me"], queryFn: api.auth.me, staleTime: 60_000 });
   if (me.isPending) return <Splash />;
-  if (me.data?.mode === "hosted" && !me.data.user) return <PasswordSignIn signups={me.data.signups !== false} />;
+  if (me.data?.mode === "hosted" && !me.data.user) return pathname === "/" ? <Landing /> : <PasswordSignIn signups={me.data.signups !== false} />;
   return <Shell account={me.data?.mode === "hosted" && me.data.user ? <AccountMenu email={me.data.user.email ?? ""} /> : null} />;
 }
 
@@ -85,9 +90,9 @@ function Shell({ account }: { account: ReactNode }) {
     <div className="min-h-dvh">
       <header className="sticky top-0 z-20 border-b border-zinc-200 bg-white/80 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/80">
         <div className="mx-auto flex h-14 max-w-7xl items-center gap-2 px-4 sm:gap-6">
-          <NavLink to="/" className="flex items-center gap-2 font-semibold">
-            <span className="relative flex size-6 items-center justify-center rounded-full bg-violet-600">
-              <span className="size-2.5 rounded-full bg-white" />
+          <NavLink to="/" className="flex items-center gap-2 font-display text-lg font-bold tracking-tight">
+            <span className="relative flex size-6 items-center justify-center rounded-full bg-brand-300 ring-1 ring-black/10">
+              <span className="size-2.5 rounded-full bg-zinc-950" />
             </span>
             <span className="hidden sm:inline">Lucid</span>
           </NavLink>

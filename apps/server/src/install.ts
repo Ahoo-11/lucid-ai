@@ -27,7 +27,7 @@ export function publicEndpoint(c: Context) {
 }
 
 // The endpoint is pasted into a shell script, so only plain URLs pass.
-const SAFE_URL = /^https?:\/\/[A-Za-z0-9.-]+(:\d+)?(\/[A-Za-z0-9._~/-]*)?$/;
+export const SAFE_URL = /^https?:\/\/[A-Za-z0-9.-]+(:\d+)?(\/[A-Za-z0-9._~/-]*)?$/;
 
 export function hermesInstallScript(endpoint: string, version: string) {
   return `#!/bin/sh

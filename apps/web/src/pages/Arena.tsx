@@ -23,7 +23,7 @@ export function Arena() {
         <Card className="divide-y divide-zinc-100 dark:divide-zinc-800">
           {experiments.map((e) => (
             <Link key={e.id} to={`/arena/${e.id}`} className="flex items-center gap-3 px-4 py-3 hover:bg-zinc-50 dark:hover:bg-zinc-800/40">
-              <FlaskConical className="size-4 shrink-0 text-violet-500" />
+              <FlaskConical className="size-4 shrink-0 text-brand-600" />
               <div className="min-w-0 flex-1">
                 <div className="truncate text-sm font-medium">{e.name}</div>
                 <div className="text-xs text-zinc-500">
@@ -60,7 +60,7 @@ function HowItWorks() {
       </div>
       <Card>
         <Empty icon={<FlaskConical className="size-8" />} title="No experiments yet">
-          Start from a run. <Link to="/runs" className="text-violet-600 underline dark:text-violet-400">Open your runs</Link>
+          Start from a run. <Link to="/runs" className="text-brand-700 underline dark:text-brand-300">Open your runs</Link>
         </Empty>
       </Card>
     </div>
@@ -70,7 +70,7 @@ function HowItWorks() {
 function StepCard({ icon, title, children }: { icon: ReactNode; title: string; children: ReactNode }) {
   return (
     <Card className="p-4">
-      <div className="mb-2 text-violet-600 dark:text-violet-400">{icon}</div>
+      <div className="mb-2 text-brand-700 dark:text-brand-300">{icon}</div>
       <div className="font-medium">{title}</div>
       <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">{children}</p>
     </Card>
@@ -108,7 +108,7 @@ function ContextView({ context }: { context: DecisionContext | null | undefined 
         <p className="mt-0.5 line-clamp-3 whitespace-pre-wrap">{context.request ?? "(not captured)"}</p>
       </div>
       {(context.recent?.length || context.tools?.length) && (
-        <button type="button" onClick={() => setOpen(!open)} className="inline-flex items-center gap-1 text-xs font-medium text-violet-600 dark:text-violet-400">
+        <button type="button" onClick={() => setOpen(!open)} className="inline-flex items-center gap-1 text-xs font-medium text-brand-700 dark:text-brand-300">
           {open ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
           {open ? "Hide" : "Show"} what the agent had seen
         </button>
@@ -142,7 +142,7 @@ function ModelInput({ value, onChange, models, placeholder }: { value: string; o
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 font-mono text-sm outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-400/20 dark:border-zinc-800 dark:bg-zinc-900"
+        className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 font-mono text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-400/30 dark:border-zinc-800 dark:bg-zinc-900"
       />
       <datalist id="arena-models">
         {models.map((m) => (
@@ -232,7 +232,7 @@ export function NewExperiment() {
         </Section>
         {otherDecisions.length > 0 && (
           <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={allDecisions} onChange={(e) => setAllDecisions(e.target.checked)} className="accent-violet-600" />
+            <input type="checkbox" checked={allDecisions} onChange={(e) => setAllDecisions(e.target.checked)} className="accent-brand-600" />
             Also test the other {plural(otherDecisions.length, "decision")} in this run (more votes, more confidence)
           </label>
         )}
@@ -263,7 +263,7 @@ export function NewExperiment() {
                   </div>
                 )}
                 {variant.model.trim() && !price && models.data?.models.length ? <div className="text-xs text-amber-600">Not in the tool-capable model list; it may not support tools.</div> : null}
-                <button type="button" onClick={() => update(i, { promptOpen: !variant.promptOpen })} className="inline-flex items-center gap-1 text-xs font-medium text-violet-600 dark:text-violet-400">
+                <button type="button" onClick={() => update(i, { promptOpen: !variant.promptOpen })} className="inline-flex items-center gap-1 text-xs font-medium text-brand-700 dark:text-brand-300">
                   {variant.promptOpen ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
                   Change the system prompt too
                 </button>
@@ -272,7 +272,7 @@ export function NewExperiment() {
                     <div className="flex gap-3 text-xs">
                       {(["append", "replace"] as const).map((mode) => (
                         <label key={mode} className="flex items-center gap-1">
-                          <input type="radio" checked={variant.mode === mode} onChange={() => update(i, { mode })} className="accent-violet-600" />
+                          <input type="radio" checked={variant.mode === mode} onChange={() => update(i, { mode })} className="accent-brand-600" />
                           {mode === "append" ? "Add to the end of the system prompt" : "Replace the system prompt"}
                         </label>
                       ))}
@@ -290,7 +290,7 @@ export function NewExperiment() {
             );
           })}
           {variants.length < 4 && (
-            <button type="button" onClick={() => setVariants((all) => [...all, emptyVariant()])} className="inline-flex items-center gap-1 text-sm font-medium text-violet-600 dark:text-violet-400">
+            <button type="button" onClick={() => setVariants((all) => [...all, emptyVariant()])} className="inline-flex items-center gap-1 text-sm font-medium text-brand-700 dark:text-brand-300">
               <Plus className="size-4" /> Add another model or prompt
             </button>
           )}
@@ -309,7 +309,7 @@ export function NewExperiment() {
           type="button"
           disabled={!ready || create.isPending}
           onClick={() => create.mutate()}
-          className="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-500 disabled:opacity-40"
+          className="inline-flex items-center gap-2 rounded-lg bg-brand-300 px-4 py-2 text-sm font-medium text-zinc-950 hover:bg-brand-200 disabled:opacity-40"
         >
           <FlaskConical className="size-4" />
           {create.isPending ? "Starting…" : "Start the blind test"}
@@ -405,7 +405,7 @@ export function ExperimentPage() {
       )}
 
       {progress.replays.failed > 0 && (
-        <button type="button" onClick={() => retry.mutate()} className="text-sm text-violet-600 underline dark:text-violet-400">
+        <button type="button" onClick={() => retry.mutate()} className="text-sm text-brand-700 underline dark:text-brand-300">
           Retry {plural(progress.replays.failed, "failed replay")}
         </button>
       )}
@@ -480,7 +480,7 @@ function VoteButton({ onClick, disabled, hotkey, children }: { onClick: () => vo
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className="inline-flex items-center gap-2 rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium hover:border-violet-400 hover:bg-violet-50 disabled:opacity-40 dark:border-zinc-700 dark:hover:bg-violet-500/10"
+      className="inline-flex items-center gap-2 rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium hover:border-brand-500 hover:bg-brand-50 disabled:opacity-40 dark:border-zinc-700 dark:hover:bg-brand-400/10"
     >
       {children}
       <kbd className="rounded border border-zinc-300 px-1 font-mono text-[10px] text-zinc-500 dark:border-zinc-600">{hotkey}</kbd>
@@ -571,9 +571,9 @@ function Recommendation({ data, ranked, useHuman }: { data: Experiment; ranked: 
   const tied = best.id !== original.id && standing(best)?.rating === standing(original)?.rating;
 
   return (
-    <div className="rounded-xl border border-violet-200 bg-violet-50 p-4 dark:border-violet-500/30 dark:bg-violet-500/10">
+    <div className="rounded-xl border border-brand-200 bg-brand-50 p-4 dark:border-brand-400/30 dark:bg-brand-400/10">
       <div className="flex items-start gap-3">
-        <Trophy className="mt-0.5 size-5 shrink-0 text-violet-600 dark:text-violet-400" />
+        <Trophy className="mt-0.5 size-5 shrink-0 text-brand-700 dark:text-brand-300" />
         <div className="space-y-1 text-sm">
           {best.id === original.id ? (
             <p className="font-semibold">Keep what you have: the original won {pct(standing(original)?.winRate)} of {source}.</p>
