@@ -3,10 +3,10 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { serve } from "@hono/node-server";
 import { count } from "drizzle-orm";
+import { aiFromEnv } from "./ai";
 import { createApp } from "./app";
 import { clerkAuth } from "./clerk";
 import { openDb, schema } from "./db";
-import { openAICompatibleClient } from "./ee/arena/llm";
 import { createApiKey, ensureDefaultProject } from "./keys";
 import { LiveHub } from "./live";
 import { startCatalogRefresh } from "./pricing";
@@ -45,11 +45,15 @@ const clerk = !localMode && clerkSecret && clerkPublishable ? clerkAuth({ secret
 if (!localMode && !clerk && (clerkSecret || clerkPublishable)) console.warn("Clerk: set both CLERK_SECRET_KEY and CLERK_PUBLISHABLE_KEY; using email + password sign-in.");
 
 const live = new LiveHub();
-// Arena replays and the judge use your own key (OpenRouter by default: one key, every model).
-const replayKey = process.env.LUCID_REPLAY_API_KEY || userEnv("OPENROUTER_API_KEY");
-const chat = replayKey ? openAICompatibleClient({ apiKey: replayKey, baseUrl: process.env.LUCID_REPLAY_BASE_URL }) : undefined;
-if (!chat) console.info("Arena: no OPENROUTER_API_KEY (or LUCID_REPLAY_API_KEY) set, so replays are off.");
-const ctx = { db, live, localMode, signups, defaultProjectId: projectId, log: console, chat, clerk };
+// Inbox diagnoses, Arena replays and the judge use your own key: Meta's Muse
+// Spark on Baseten (BASETEN_API_KEY), or OpenRouter (one key, every model).
+const ai = aiFromEnv(userEnv);
+console.info(
+  ai
+    ? `AI: ${ai.info.provider === "baseten" ? `Baseten, ${ai.info.model}` : "OpenRouter"} for Inbox diagnoses and the Arena.`
+    : "AI: no BASETEN_API_KEY or OPENROUTER_API_KEY set, so Inbox diagnoses and Arena replays are off.",
+);
+const ctx = { db, live, localMode, signups, defaultProjectId: projectId, log: console, chat: ai?.chat, ai: ai?.info, clerk };
 console.info(
   localMode
     ? "Mode: local (no sign-in, this machine only)"

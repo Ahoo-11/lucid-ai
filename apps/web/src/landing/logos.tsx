@@ -16,6 +16,7 @@ import groq from "./logos/groq.svg?raw";
 import hermesagent from "./logos/hermesagent.svg?raw";
 import langchain from "./logos/langchain.svg?raw";
 import langgraph from "./logos/langgraph.svg?raw";
+import meta from "./logos/meta.svg?raw";
 import mistral from "./logos/mistral.svg?raw";
 import openai from "./logos/openai.svg?raw";
 import openrouter from "./logos/openrouter.svg?raw";
@@ -37,6 +38,7 @@ export const BRANDS = {
   vercel: { name: "Vercel AI SDK", svg: vercel },
   otel: { name: "OpenTelemetry", svg: opentelemetry },
   openai: { name: "OpenAI", svg: openai },
+  meta: { name: "Meta Muse Spark", svg: meta },
   anthropic: { name: "Anthropic", svg: anthropic },
   gemini: { name: "Gemini", svg: gemini },
   openrouter: { name: "OpenRouter", svg: openrouter },
@@ -52,6 +54,7 @@ export const BRANDS = {
 /** Only what connects today: native integrations, the proxy, and OpenTelemetry. */
 export const AGENTS: Brand[] = [BRANDS.claudeCode, BRANDS.hermes, BRANDS.langgraph, BRANDS.langchain, BRANDS.vercel, BRANDS.otel];
 export const PROVIDERS: Brand[] = [
+  BRANDS.meta,
   BRANDS.openai,
   BRANDS.anthropic,
   BRANDS.gemini,

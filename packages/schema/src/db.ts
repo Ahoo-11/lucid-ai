@@ -118,6 +118,28 @@ export const historySyncs = pgTable(
   (t) => [primaryKey({ columns: [t.projectId, t.id] }), index("history_syncs_project_updated").on(t.projectId, t.updatedAt)],
 );
 
+/**
+ * An Inbox problem explained by a model (Muse Spark when Baseten is set up):
+ * root cause and fix written from the failing steps, made once per problem.
+ */
+export const issueExplanations = pgTable(
+  "issue_explanations",
+  {
+    projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+    /** The Inbox's id for the problem: its kind, tool and error signature. */
+    issueId: text("issue_id").notNull(),
+    model: text("model").notNull(),
+    /** ready, or failed (tried again after a while). */
+    status: text("status").notNull(),
+    title: text("title"),
+    why: text("why"),
+    fix: text("fix"),
+    error: text("error"),
+    createdAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.projectId, t.issueId] })],
+);
+
 /** Every payload exactly as received, so improved normalizers can reprocess history. */
 export const rawEvents = pgTable(
   "raw_events",

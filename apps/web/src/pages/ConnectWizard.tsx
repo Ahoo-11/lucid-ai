@@ -303,7 +303,7 @@ function ProviderStep({ agent, providers, onPick }: { agent: AgentChoice; provid
     <>
       <Heading title={agent.id === "custom" ? "Which AI does your agent use?" : `Which AI does your ${agent.name} agent use?`} sub="The company whose API key it has." />
       <div className="mt-6 grid grid-cols-3 gap-2 sm:grid-cols-5">
-        {providers.map((id) => {
+        {[...providers].sort((a, b) => providerRank(a) - providerRank(b)).map((id) => {
           const known = PROVIDERS[id];
           return (
             <Tile key={id} small label={known?.label ?? id} onClick={() => onPick(id)}>
@@ -717,7 +717,9 @@ const WhatChanges = () => (
 // Any agent, through the LLM proxy
 
 /** `base`: what goes after the provider to make the base URL its own SDK expects. */
-const PROVIDERS: Record<string, { label: string; brand: Brand; base: string; keyVar: string; model: string; anthropic?: boolean }> = {
+const PROVIDERS: Record<string, { label: string; brand: Brand; base: string; keyVar: string; model: string; anthropic?: boolean; /** Whose API key it is, when not the label's. */ company?: string }> = {
+  // Meta's Muse Spark, served by Baseten. First: it's the hackathon's model.
+  baseten: { label: "Muse Spark", company: "Baseten", brand: BRANDS.meta, base: "/v1", keyVar: "BASETEN_API_KEY", model: "meta-models/muse-spark-open-1026" },
   openai: { label: "OpenAI", brand: BRANDS.openai, base: "/v1", keyVar: "OPENAI_API_KEY", model: "gpt-4o-mini" },
   anthropic: { label: "Anthropic", brand: BRANDS.anthropic, base: "", keyVar: "ANTHROPIC_API_KEY", model: "claude-haiku-4-5", anthropic: true },
   openrouter: { label: "OpenRouter", brand: BRANDS.openrouter, base: "/v1", keyVar: "OPENROUTER_API_KEY", model: "openai/gpt-4o-mini" },
@@ -728,6 +730,12 @@ const PROVIDERS: Record<string, { label: string; brand: Brand; base: string; key
   xai: { label: "xAI", brand: BRANDS.xai, base: "/v1", keyVar: "XAI_API_KEY", model: "grok-3-mini" },
   together: { label: "Together", brand: BRANDS.together, base: "/v1", keyVar: "TOGETHER_API_KEY", model: "meta-llama/Llama-3.3-70B-Instruct-Turbo" },
   fireworks: { label: "Fireworks", brand: BRANDS.fireworks, base: "/v1", keyVar: "FIREWORKS_API_KEY", model: "accounts/fireworks/models/llama-v3p3-70b-instruct" },
+};
+
+/** Muse Spark first (the hackathon's model), then the order above; providers a server added go last. */
+const providerRank = (id: string) => {
+  const at = Object.keys(PROVIDERS).indexOf(id);
+  return at === -1 ? Number.MAX_SAFE_INTEGER : at;
 };
 
 type Lang = "env" | "python" | "typescript" | "curl";
@@ -745,9 +753,9 @@ function proxySnippet(lang: Lang, provider: string, base: string) {
     if (lang === "typescript") return `import Anthropic from "@anthropic-ai/sdk";\n\nconst client = new Anthropic({ baseURL: "${base}" }); // still reads ${p.keyVar}`;
     return `curl ${base}/v1/messages \\\n  -H "x-api-key: $${p.keyVar}" \\\n  -H "anthropic-version: 2023-06-01" \\\n  -H "content-type: application/json" \\\n  -d '{"model": "${p.model}", "max_tokens": 256, "messages": [{"role": "user", "content": "Hello"}]}'`;
   }
-  if (lang === "env") return provider === "openai" ? `OPENAI_BASE_URL=${base}` : `OPENAI_BASE_URL=${base}\nOPENAI_API_KEY=<your ${p.label} key>`;
-  if (lang === "python") return `import os\nfrom openai import OpenAI\n\nclient = OpenAI(\n    base_url="${base}",\n    api_key=os.environ["${p.keyVar}"],  # your ${p.label} key, as before\n)`;
-  if (lang === "typescript") return `import OpenAI from "openai";\n\nconst client = new OpenAI({\n  baseURL: "${base}",\n  apiKey: process.env.${p.keyVar}, // your ${p.label} key, as before\n});`;
+  if (lang === "env") return provider === "openai" ? `OPENAI_BASE_URL=${base}` : `OPENAI_BASE_URL=${base}\nOPENAI_API_KEY=<your ${"company" in p && p.company ? p.company : p.label} key>`;
+  if (lang === "python") return `import os\nfrom openai import OpenAI\n\nclient = OpenAI(\n    base_url="${base}",\n    api_key=os.environ["${p.keyVar}"],  # your ${"company" in p && p.company ? p.company : p.label} key, as before\n)`;
+  if (lang === "typescript") return `import OpenAI from "openai";\n\nconst client = new OpenAI({\n  baseURL: "${base}",\n  apiKey: process.env.${p.keyVar}, // your ${"company" in p && p.company ? p.company : p.label} key, as before\n});`;
   return `curl ${base}/chat/completions \\\n  -H "Authorization: Bearer $${p.keyVar}" \\\n  -H "content-type: application/json" \\\n  -d '{"model": "${p.model}", "messages": [{"role": "user", "content": "Hello"}]}'`;
 }
 
@@ -765,14 +773,14 @@ const LABEL_HEADERS: { name: string; what: string }[] = [
   { name: "x-lucid-user", what: "Your end user's id, to find their runs later." },
 ];
 
-function proxyPrompt(agent: AgentChoice, label: string, base: string, envLines: string) {
+function proxyPrompt(agent: AgentChoice, label: string, company: string, base: string, envLines: string) {
   const what = agent.id === "custom" ? "this project's" : `this ${agent.name} project's`;
   return `Route ${what} ${label} calls through Lucid, an observability tool, so its runs get recorded.
 
 - Point the ${label} client at this base URL: ${base}
   If the client reads its settings from the environment, add this to the project's .env instead:
   ${envLines.split("\n").join("\n  ")}
-- Keep the existing ${label} API key exactly as it is.
+- Keep the existing ${company} API key exactly as it is.
 - Don't change anything else. Then tell me what you changed and how to run it once.`;
 }
 
@@ -802,14 +810,14 @@ function ProxySetup({ target, provider, agent, onUseOtel }: { target: Target; pr
         </Instruction>
         <Instruction n={2} title={lang === "curl" ? "Watch it arrive below" : "Restart your agent and run it once"}>
           <Fine>
-            Your {label} key stays where it is. Lucid passes it on to {label} and never stores it.
+            Your {p?.company ?? label} key stays where it is. Lucid passes it on to {p?.company ?? label} and never stores it.
           </Fine>
         </Instruction>
       </Instructions>
       <AskAgent
         title="Or let your coding agent do it"
         sub="Paste this into Claude Code, Cursor or Codex, opened in your project."
-        prompt={proxyPrompt(agent, label, base, proxySnippet("env", provider, base))}
+        prompt={proxyPrompt(agent, label, p?.company ?? label, base, proxySnippet("env", provider, base))}
         note={target.keyless ? undefined : "The prompt includes your Lucid key, as the .env line does."}
       />
       {agent.id === "langgraph" && (

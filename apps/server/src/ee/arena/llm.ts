@@ -1,6 +1,7 @@
-// Calls any OpenAI-compatible chat API (OpenRouter by default, so one key
-// reaches every model). Replays send the captured messages and tool schemas
-// but never execute a tool: we compare the next decision, not its effects.
+// Calls any OpenAI-compatible chat API: OpenRouter (one key, every model) or a
+// single provider such as Baseten, which serves Meta's Muse Spark. Replays send
+// the captured messages and tool schemas but never execute a tool: we compare
+// the next decision, not its effects.
 
 export type ToolCall = { id?: string; name: string; input?: unknown };
 
@@ -19,8 +20,18 @@ export type ChatRequest = {
   maxTokens?: number;
   temperature?: number;
   json?: boolean;
-  /** For reasoning models: how much hidden thinking to spend (OpenRouter's unified setting). */
+  /** For reasoning models: how much hidden thinking to spend. */
   reasoningEffort?: "low" | "medium" | "high";
+};
+
+/** What a provider needs on every call, unless the request says otherwise. */
+export type ChatDefaults = {
+  /**
+   * Floor for max tokens. For models that always reason (Muse Spark), the
+   * thinking counts against the limit, so a small one leaves an empty answer.
+   */
+  minMaxTokens?: number;
+  reasoningEffort?: ChatRequest["reasoningEffort"];
 };
 
 export type ChatResult = {
@@ -45,27 +56,32 @@ const parseArgs = (raw: unknown) => {
   }
 };
 
-export function openAICompatibleClient(options: { apiKey: string; baseUrl?: string; fetchImpl?: typeof fetch }): ChatClient {
+export function openAICompatibleClient(options: { apiKey: string; baseUrl?: string; fetchImpl?: typeof fetch; defaults?: ChatDefaults }): ChatClient {
   const baseUrl = (options.baseUrl ?? "https://openrouter.ai/api/v1").replace(/\/+$/, "");
   const fetchImpl = options.fetchImpl ?? fetch;
+  // OpenRouter has its own spelling for reasoning and cost; everyone else takes the standard one.
+  const openRouter = /openrouter\.ai/.test(baseUrl);
+  const defaults = options.defaults ?? {};
   return async (request, signal) => {
     const started = Date.now();
+    const maxTokens = defaults.minMaxTokens ? Math.max(request.maxTokens ?? 0, defaults.minMaxTokens) : request.maxTokens;
+    const effort = request.reasoningEffort ?? defaults.reasoningEffort;
     const response = await fetchImpl(`${baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
         authorization: `Bearer ${options.apiKey}`,
         "content-type": "application/json",
-        "x-title": "Lucid Arena",
+        ...(openRouter ? { "x-title": "Lucid Arena" } : {}),
       },
       body: JSON.stringify({
         model: request.model,
         messages: request.messages,
         ...(request.tools?.length ? { tools: request.tools, tool_choice: "auto" } : {}),
-        ...(request.maxTokens ? { max_tokens: request.maxTokens } : {}),
+        ...(maxTokens ? { max_tokens: maxTokens } : {}),
         ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
         ...(request.json ? { response_format: { type: "json_object" } } : {}),
-        ...(request.reasoningEffort ? { reasoning: { effort: request.reasoningEffort } } : {}),
-        usage: { include: true },
+        ...(effort ? (openRouter ? { reasoning: { effort } } : { reasoning_effort: effort }) : {}),
+        ...(openRouter ? { usage: { include: true } } : {}),
       }),
       signal: signal ?? AbortSignal.timeout(180_000),
     });

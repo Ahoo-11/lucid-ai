@@ -93,9 +93,12 @@ export type Issue = {
   lastSeen: string | null;
   firstSeen: string | null;
   examples: { runId: string; runName: string | null }[];
+  /** Lucid's rule-based explanation, shown until (or unless) a model's diagnosis is ready. */
   title: string;
   why: string;
   fix: string;
+  /** Written by a model (Muse Spark) from the failing steps; null when diagnoses are off or failed. */
+  diagnosis: { status: "pending" } | { status: "ready"; title: string; why: string; fix: string; model: string } | null;
 };
 
 export type ConnectStatus = {
@@ -117,7 +120,8 @@ export type DeviceLink =
   | { code: string; status: "taken" }
   | { code: string; status: "pending" | "approved" | "claimed" | "denied" | "expired"; machine: string; os: string | null; agents: string[]; expiresAt: string };
 
-export type ArenaModel = { id: string; name: string; inputPerMillion: number; outputPerMillion: number; contextLength: number | null };
+/** Prices are null for a model on prepaid credits (Muse Spark on Baseten). */
+export type ArenaModel = { id: string; name: string; inputPerMillion: number | null; outputPerMillion: number | null; contextLength: number | null };
 export type ToolCall = { id?: string; name: string; input?: unknown };
 export type Output = { text?: string; toolCalls?: ToolCall[] };
 export type DecisionContext = { request?: string; recent?: { role: string; text: string }[]; tools?: string[] };
@@ -213,7 +217,7 @@ export const api = {
   overview: () => request<Overview>("/overview"),
   runs: (params: URLSearchParams) => request<{ runs: RunListItem[]; nextBefore: string | null }>(`/runs?${params}`),
   run: (id: string) => request<RunDetail>(`/runs/${id}`),
-  issues: () => request<{ issues: Issue[] }>("/issues"),
+  issues: () => request<{ issues: Issue[]; diagnosisModel?: string | null }>("/issues"),
   connect: () => request<ConnectStatus>("/connect/status"),
   keys: () => request<{ keys: ApiKey[] }>("/keys"),
   createKey: (name: string) => request<ApiKey & { key: string }>("/keys", { method: "POST", body: JSON.stringify({ name }) }),
@@ -225,7 +229,7 @@ export const api = {
   },
   syncs: () => request<{ syncs: HistorySync[] }>("/syncs"),
   arena: {
-    models: () => request<{ configured: boolean; models: ArenaModel[]; suggestedJudge: string | null }>("/arena/models"),
+    models: () => request<{ configured: boolean; models: ArenaModel[]; suggestedJudge: string | null; provider?: string }>("/arena/models"),
     check: (stepId: string) => request<{ ok: true; messages: number; tools: number } | { ok: false; reason: string }>(`/arena/check?step=${stepId}`),
     list: () => request<{ experiments: ExperimentSummary[] }>("/arena/experiments"),
     create: (body: { stepIds: string[]; variants: VariantInput[]; judgeModel?: string; name?: string }) =>

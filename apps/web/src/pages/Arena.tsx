@@ -172,6 +172,11 @@ export function NewExperiment() {
   useEffect(() => {
     if (!judge && models.data?.suggestedJudge) setJudge(models.data.suggestedJudge);
   }, [models.data, judge]);
+  // A key for one model (Muse Spark on Baseten): it's the challenger, so fill it in.
+  const onlyModel = models.data?.provider === "baseten" && models.data.models.length === 1 ? models.data.models[0]!.id : null;
+  useEffect(() => {
+    if (onlyModel) setVariants((all) => (all.length === 1 && !all[0]!.model ? [{ ...all[0]!, model: onlyModel }] : all));
+  }, [onlyModel]);
 
   const step = run.data?.steps.find((s) => s.id === stepId);
   const otherDecisions = (run.data?.steps ?? []).filter((s) => s.kind === "llm" && s.id !== stepId && s.status === "ok");
@@ -181,7 +186,9 @@ export function NewExperiment() {
   const decisions = allDecisions ? 1 + otherDecisions.length : 1;
   const estimate = variants.reduce((sum, v) => {
     const price = priceOf.get(v.model.trim());
-    return price ? sum + decisions * ((contextTokens * price.inputPerMillion + 500 * price.outputPerMillion) / 1_000_000) : sum;
+    return price?.inputPerMillion != null && price.outputPerMillion != null
+      ? sum + decisions * ((contextTokens * price.inputPerMillion + 500 * price.outputPerMillion) / 1_000_000)
+      : sum;
   }, 0);
 
   const create = useMutation({
@@ -213,7 +220,7 @@ export function NewExperiment() {
 
       {models.data && !models.data.configured && (
         <Card className="border-amber-300 bg-amber-50 p-4 text-sm dark:border-amber-500/30 dark:bg-amber-500/10">
-          Replays need a model key. Set <code className="font-mono">OPENROUTER_API_KEY</code> (one key reaches every model) for the Lucid server and restart it.
+          Replays need a model key. Set <code className="font-mono">BASETEN_API_KEY</code> (Meta's Muse Spark) or <code className="font-mono">OPENROUTER_API_KEY</code> (one key reaches every model) for the Lucid server and restart it.
         </Card>
       )}
       {check.data && !check.data.ok && <Card className="border-rose-300 bg-rose-50 p-4 text-sm dark:border-rose-500/30 dark:bg-rose-500/10">{check.data.reason}</Card>}
@@ -250,7 +257,7 @@ export function NewExperiment() {
             return (
               <div key={i} className="space-y-2 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
                 <div className="flex items-center gap-2">
-                  <ModelInput value={variant.model} onChange={(model) => update(i, { model })} models={models.data?.models ?? []} placeholder="Model, e.g. openai/gpt-5-mini" />
+                  <ModelInput value={variant.model} onChange={(model) => update(i, { model })} models={models.data?.models ?? []} placeholder={onlyModel ? `Model, e.g. ${onlyModel}` : "Model, e.g. openai/gpt-5-mini"} />
                   {variants.length > 1 && (
                     <button type="button" onClick={() => setVariants((all) => all.filter((_, j) => j !== i))} className="rounded-md p-1 text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100" title="Remove">
                       <X className="size-4" />
@@ -259,7 +266,10 @@ export function NewExperiment() {
                 </div>
                 {price && (
                   <div className="text-xs text-zinc-500">
-                    {price.name} · ${price.inputPerMillion.toFixed(2)} / ${price.outputPerMillion.toFixed(2)} per million tokens in / out
+                    {price.name}
+                    {price.inputPerMillion != null && price.outputPerMillion != null
+                      ? ` · $${price.inputPerMillion.toFixed(2)} / $${price.outputPerMillion.toFixed(2)} per million tokens in / out`
+                      : " · runs on your Baseten credits"}
                   </div>
                 )}
                 {variant.model.trim() && !price && models.data?.models.length ? <div className="text-xs text-amber-600">Not in the tool-capable model list; it may not support tools.</div> : null}
@@ -290,8 +300,13 @@ export function NewExperiment() {
             );
           })}
           {variants.length < 4 && (
-            <button type="button" onClick={() => setVariants((all) => [...all, emptyVariant()])} className="inline-flex items-center gap-1 text-sm font-medium text-brand-700 dark:text-brand-300">
-              <Plus className="size-4" /> Add another model or prompt
+            <button
+              type="button"
+              // With one model on offer, another contender means the same model with a different prompt.
+              onClick={() => setVariants((all) => [...all, onlyModel ? { ...emptyVariant(), model: onlyModel, promptOpen: true } : emptyVariant()])}
+              className="inline-flex items-center gap-1 text-sm font-medium text-brand-700 dark:text-brand-300"
+            >
+              <Plus className="size-4" /> {onlyModel ? "Add Muse Spark with a different prompt" : "Add another model or prompt"}
             </button>
           )}
         </Section>

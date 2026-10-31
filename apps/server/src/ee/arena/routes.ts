@@ -28,6 +28,12 @@ export function arenaRoutes(ctx: AppContext) {
   });
 
   app.get("/models", (c) => {
+    // A key for one model (Baseten's Muse Spark on the Meta hackathon credits):
+    // that model is the challenger and the judge.
+    if (ctx.ai?.onlyModel && ctx.ai.model) {
+      const only = { id: ctx.ai.model, name: /muse-spark/i.test(ctx.ai.model) ? "Muse Spark (Meta, on Baseten)" : ctx.ai.model, inputPerMillion: null, outputPerMillion: null, contextLength: null };
+      return c.json({ configured: !!ctx.chat, models: [only], suggestedJudge: only.id, provider: ctx.ai.provider });
+    }
     const catalog = pricingCatalog() ?? {};
     const models = Object.values(catalog)
       .filter((m) => m.id && m.tools)

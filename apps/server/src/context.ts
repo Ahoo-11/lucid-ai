@@ -1,3 +1,4 @@
+import type { AiInfo } from "./ai";
 import type { ClerkAuth } from "./clerk";
 import type { Db } from "./db";
 import type { ChatClient } from "./ee/arena/llm";
@@ -19,10 +20,12 @@ export type AppContext = {
   clerk?: ClerkAuth;
   log: Pick<Console, "info" | "warn" | "error">;
   /**
-   * Model access for Arena replays and the judge (bring your own key). Unset
-   * when no key is configured; the Arena then explains how to add one.
+   * Model access for Inbox diagnoses, Arena replays and the judge (bring your
+   * own key). Unset when no key is configured; the Arena then explains how to add one.
    */
   chat?: ChatClient;
+  /** Which provider and model `chat` reaches (see ai.ts). */
+  ai?: AiInfo;
 };
 
 export type AppEnv = { Variables: { projectId: string } };

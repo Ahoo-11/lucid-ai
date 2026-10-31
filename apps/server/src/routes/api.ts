@@ -8,6 +8,7 @@ import type { AppContext, AppEnv } from "../context";
 import { schema } from "../db";
 import { CLOSED, resolveAccount } from "../auth";
 import { arenaRoutes } from "../ee/arena/routes";
+import { createExplainer } from "../explain";
 import { errorSignature, hintFor } from "../insights";
 import { publicEndpoint } from "../install";
 import { createApiKey } from "../keys";
@@ -64,9 +65,13 @@ export const requireProject = (ctx: AppContext): MiddlewareHandler<AppEnv> => as
   return next();
 };
 
+/** How many of the top recurring problems get a model-written diagnosis. */
+const DIAGNOSED_ISSUES = 10;
+
 export function apiRoutes(ctx: AppContext) {
   const app = new Hono<AppEnv>();
   const { db } = ctx;
+  const explainer = createExplainer(ctx);
 
   app.use("*", requireProject(ctx));
 
@@ -189,7 +194,10 @@ export function apiRoutes(ctx: AppContext) {
     const issues = [...groups.values()]
       .map(({ runIds, key, ...group }) => ({ id: Buffer.from(key).toString("base64url"), ...group, runs: runIds.size, ...hintFor(group.toolName, group.kind, group.sample) }))
       .sort((a, b) => b.runs - a.runs || b.occurrences - a.occurrences);
-    return c.json({ issues });
+    // The model diagnoses the problems the Inbox shows as cards: the top recurring ones.
+    const wanted = new Set(issues.filter((issue) => issue.runs >= 2).slice(0, DIAGNOSED_ISSUES).map((issue) => issue.id));
+    const diagnoses = await explainer.diagnoses(projectId, issues.slice(0, 200), wanted);
+    return c.json({ issues: issues.map((issue) => ({ ...issue, diagnosis: diagnoses.get(issue.id) ?? null })), diagnosisModel: explainer.enabled ? ctx.ai?.model : null });
   });
 
   /**

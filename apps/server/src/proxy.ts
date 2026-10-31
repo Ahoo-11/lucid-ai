@@ -28,6 +28,8 @@ export const DEFAULT_UPSTREAMS: Record<string, string> = {
   xai: "https://api.x.ai",
   fireworks: "https://api.fireworks.ai/inference",
   gemini: "https://generativelanguage.googleapis.com/v1beta/openai",
+  // Meta's Muse Spark (meta-models/muse-spark-open-1026) and other open models.
+  baseten: "https://inference.baseten.co",
 };
 
 /** Self-hosters add their own (vLLM, Ollama, a company gateway) via LUCID_PROXY_UPSTREAMS='{"name":"http://…"}'. */

@@ -43,6 +43,13 @@
       "when": 1793382214564,
       "tag": "0005_history_syncs",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1793431245012,
+      "tag": "0006_issue_explanations",
+      "breakpoints": true
     }
   ]
 }

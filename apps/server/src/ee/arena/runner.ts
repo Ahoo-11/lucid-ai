@@ -74,7 +74,7 @@ export async function createExperiment(
   const variants = input.variants.filter((v) => v.model?.trim()).slice(0, MAX_REPLAY_VARIANTS);
   if (!stepIds.length) throw new ArenaError(400, "Pick at least one decision to test.");
   if (!variants.length) throw new ArenaError(400, "Pick at least one model or prompt to compare with the original.");
-  if (!ctx.chat) throw new ArenaError(409, "No model key is configured. Set OPENROUTER_API_KEY for the Lucid server and restart it.");
+  if (!ctx.chat) throw new ArenaError(409, "No model key is configured. Set BASETEN_API_KEY (Muse Spark) or OPENROUTER_API_KEY for the Lucid server and restart it.");
 
   const db = ctx.db;
   const stepRows = await db.select().from(steps).where(and(eq(steps.projectId, projectId), inArray(steps.id, stepIds)));
