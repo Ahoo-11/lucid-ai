@@ -93,6 +93,24 @@ export async function resolveAccount(ctx: AppContext, c: Context): Promise<Resol
 
 export const CLOSED = "This Lucid server is invite-only. Ask its owner for access.";
 
+/** Which sign-in the web app shows. Also written into the page itself, which saves a round trip. */
+export const authConfig = (ctx: AppContext) => ({
+  mode: ctx.localMode ? "local" : "hosted",
+  provider: ctx.localMode ? "none" : ctx.clerk ? "clerk" : "password",
+  publishableKey: ctx.clerk?.publishableKey ?? null,
+  signups: ctx.signups !== false,
+});
+
+/** Clerk's frontend address, which the publishable key spells out: pk_test_<base64 of "host$">. */
+export function clerkFrontendHost(publishableKey: string) {
+  try {
+    const host = Buffer.from(publishableKey.split("_")[2] ?? "", "base64").toString("utf8").replace(/\$$/, "");
+    return /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(host) ? host : null;
+  } catch {
+    return null;
+  }
+}
+
 const isSecure = (c: Context) => c.req.header("x-forwarded-proto") === "https" || new URL(c.req.url).protocol === "https:";
 
 function setSessionCookie(c: Context, token: string) {
@@ -116,14 +134,7 @@ export function authRoutes(ctx: AppContext) {
   });
 
   /** Public: what the web app needs before it can show a sign-in screen. */
-  app.get("/config", (c) =>
-    c.json({
-      mode: ctx.localMode ? "local" : "hosted",
-      provider: ctx.localMode ? "none" : ctx.clerk ? "clerk" : "password",
-      publishableKey: ctx.clerk?.publishableKey ?? null,
-      signups: ctx.signups !== false,
-    }),
-  );
+  app.get("/config", (c) => c.json(authConfig(ctx)));
 
   app.get("/me", async (c) => {
     if (ctx.localMode) return c.json({ mode: "local" });

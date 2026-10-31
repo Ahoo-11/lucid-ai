@@ -289,10 +289,26 @@ class PluginTest(unittest.TestCase):
         self.assertEqual(sorted(m["content"] for m in body["messages"]), ["fix it", "read logs"])
         self.assertNotIn("git_branch", body["sessions"][0])
         self.assertTrue((self.home / "lucid-backfill.json").exists())
+        # Lucid hears how far it got, so the dashboard can say it's still syncing.
+        syncs = [post["body"] for post in RECEIVED if post["path"] == "/v1/syncs"]
+        self.assertEqual([(s["total"], s["done"], s["finished"]) for s in syncs], [(1, 0, False), (1, 1, True)])
+        self.assertEqual({s["id"] for s in syncs}, {syncs[0]["id"]})
+        self.assertEqual(syncs[0]["harness"], "hermes")
 
         RECEIVED.clear()
         self.plugin._backfill(30)
         self.assertEqual(RECEIVED, [])
+
+    def test_backfill_sends_the_newest_conversations_first(self):
+        now = time.time()
+        self.make_state_db(now)
+        db = sqlite3.connect(self.home / "state.db")
+        db.execute("insert into sessions values ('newer', 'cli', 'm', null, ?, ?, 'Newer task')", (now - 600, now - 500))
+        db.commit()
+        db.close()
+        self.plugin._backfill(30)
+        imports = [post["body"] for post in RECEIVED if post["path"] == "/v1/imports/hermes"]
+        self.assertEqual([body["sessions"][0]["id"] for body in imports], ["newer", "root"])
 
     def test_backfill_retries_on_next_start_when_lucid_is_down(self):
         self.make_state_db(time.time())

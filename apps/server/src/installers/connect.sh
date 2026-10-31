@@ -26,8 +26,9 @@ post() {
   fi
 }
 
-# One plain string field from a JSON reply.
+# One plain string field, or whole number, from a JSON reply.
 field() { printf '%s' "$1" | sed -n 's/.*"'"$2"'":"\([^"]*\)".*/\1/p'; }
+number() { printf '%s' "$1" | sed -n 's/.*"'"$2"'":\([0-9][0-9]*\).*/\1/p'; }
 
 AGENTS="${LUCID_AGENTS:-}"
 if [ -z "$AGENTS" ]; then
@@ -82,12 +83,14 @@ while [ "$tries" -lt 320 ]; do
   tries=$((tries + 1))
   ANSWER=$(post /api/links/poll "{\"deviceCode\":\"$DEVICE\"}")
   case "$ANSWER" in
-    *'"status":"approved"'*) KEY=$(field "$ANSWER" key); break ;;
+    *'"status":"approved"'*) KEY=$(field "$ANSWER" key); HISTORY_DAYS=$(number "$ANSWER" historyDays); break ;;
     *'"status":"denied"'*) fail "the request was declined in Lucid." ;;
     *'"status":"expired"'* | *'"status":"claimed"'*) fail "the code expired. Run this again for a new one." ;;
   esac
 done
 [ -n "$KEY" ] || fail "no approval after 10 minutes. Run this again for a new code."
+# Past runs come in only if the person asked for them on the Approve page.
+HISTORY_DAYS="${HISTORY_DAYS:-0}"
 say "Approved."
 say ""
 
@@ -102,21 +105,25 @@ if wants hermes; then
   # in place (not replaced) so a bind-mounted .env keeps working.
   ENV_FILE="$HERMES_DIR/.env"
   touch "$ENV_FILE"
-  set_env() {
+  unset_env() {
     grep -v "^$1=" "$ENV_FILE" > "$ENV_FILE.lucid" || true
-    printf '%s=%s\n' "$1" "$2" >> "$ENV_FILE.lucid"
     cat "$ENV_FILE.lucid" > "$ENV_FILE"
     rm -f "$ENV_FILE.lucid"
   }
+  set_env() {
+    unset_env "$1"
+    printf '%s=%s\n' "$1" "$2" >> "$ENV_FILE"
+  }
   set_env LUCID_ENDPOINT "$LUCID_ENDPOINT"
   set_env LUCID_API_KEY "$KEY"
-  # The plugin uploads the last 30 days once, then remembers it did.
-  set_env LUCID_BACKFILL_DAYS 30
+  # The plugin uploads past chats once, after the restart, then remembers it did.
+  if [ "$HISTORY_DAYS" -gt 0 ]; then set_env LUCID_BACKFILL_DAYS "$HISTORY_DAYS"; else unset_env LUCID_BACKFILL_DAYS; fi
   if has hermes && hermes plugins enable lucid </dev/null >/dev/null 2>&1; then
     say "- Hermes Agent: connected. Restart Hermes (the gateway, the desktop app or its container) so it loads."
   else
     say "- Hermes Agent: plugin installed. Run \"hermes plugins enable lucid\", then restart Hermes."
   fi
+  if [ "$HISTORY_DAYS" -gt 0 ]; then say "  After the restart it brings in your last $HISTORY_DAYS days of chats. Lucid shows the progress."; fi
 fi
 
 if wants claude-code; then
@@ -126,8 +133,15 @@ if wants claude-code; then
   mv "$LUCID_DIR/lucid.mjs.part" "$LUCID_DIR/lucid.mjs"
   node "$LUCID_DIR/lucid.mjs" connect claude-code --endpoint "$LUCID_ENDPOINT" --key "$KEY" </dev/null >/dev/null || fail "couldn't update Claude Code's settings."
   say "- Claude Code: connected. Start a new Claude Code session and it shows up in Lucid."
-  say "  Uploading your last 7 days of sessions..."
-  node "$LUCID_DIR/lucid.mjs" import claude-code --days 7 --endpoint "$LUCID_ENDPOINT" --key "$KEY" </dev/null 2>&1 | tail -n 1 | sed 's/^/  /' || true
+  if [ "$HISTORY_DAYS" -gt 0 ]; then
+    # In the background, so this command is done now; Lucid shows the progress.
+    if has nohup; then
+      nohup node "$LUCID_DIR/lucid.mjs" import claude-code --days "$HISTORY_DAYS" --endpoint "$LUCID_ENDPOINT" --key "$KEY" </dev/null >"$LUCID_DIR/import.log" 2>&1 &
+    else
+      node "$LUCID_DIR/lucid.mjs" import claude-code --days "$HISTORY_DAYS" --endpoint "$LUCID_ENDPOINT" --key "$KEY" </dev/null >"$LUCID_DIR/import.log" 2>&1 &
+    fi
+    say "  Bringing in your last $HISTORY_DAYS days of sessions in the background. Lucid shows the progress."
+  fi
 fi
 
 say ""

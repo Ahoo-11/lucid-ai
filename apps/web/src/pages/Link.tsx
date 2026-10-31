@@ -15,6 +15,12 @@ const AGENTS: Record<string, { name: string; brand: Brand; next: string }> = {
   hermes: { name: "Hermes Agent", brand: BRANDS.hermes, next: "Restart Hermes (the gateway, the desktop app or its container)." },
 };
 
+const HISTORY_CHOICES = [
+  { days: 0, label: "No" },
+  { days: 7, label: "Last 7 days" },
+  { days: 30, label: "Last 30 days" },
+];
+
 export function LinkPage() {
   const [params, setParams] = useSearchParams();
   const code = params.get("code");
@@ -36,8 +42,10 @@ function Approve({ code, onRetry }: { code: string; onRetry: () => void }) {
     // Once approved, watch for the installer picking up its key.
     refetchInterval: (query) => (query.state.data?.status === "approved" ? 1_500 : false),
   });
+  // Past runs are opt-in: a new connection starts clean unless people ask.
+  const [historyDays, setHistoryDays] = useState(0);
   const decide = useMutation({
-    mutationFn: (decision: "approve" | "deny") => api.links.decide(code, decision),
+    mutationFn: (decision: "approve" | "deny") => api.links.decide(code, decision, historyDays),
     onSettled: () => void queryClient.invalidateQueries({ queryKey: ["link", code] }),
   });
 
@@ -76,6 +84,9 @@ function Approve({ code, onRetry }: { code: string; onRetry: () => void }) {
                 </li>
               ))}
             </ul>
+            {historyDays > 0 && (
+              <p className="text-sm text-zinc-500 dark:text-zinc-400">Then your last {historyDays} days come in, newest first. Runs shows the progress.</p>
+            )}
             <Link
               to="/connect"
               className="group mt-2 inline-flex items-center gap-2 rounded-full bg-brand-300 px-5 py-2.5 text-sm font-semibold text-zinc-950 shadow-[0_10px_40px_-12px_rgba(216,248,74,0.6)] transition hover:bg-brand-200"
@@ -113,6 +124,32 @@ function Approve({ code, onRetry }: { code: string; onRetry: () => void }) {
         <div className="text-xs font-medium tracking-wide text-zinc-500 uppercase dark:text-zinc-400">Code</div>
         <div className="mt-1 font-mono text-3xl font-semibold tracking-[0.15em]">{data.code}</div>
         <div className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">Check it matches the one in your terminal.</div>
+      </div>
+
+      <div className="mt-6 text-left" role="radiogroup" aria-labelledby="history-label">
+        <div id="history-label" className="font-semibold">
+          Also bring in past runs?
+        </div>
+        <p className="text-sm text-zinc-500 dark:text-zinc-400">New runs show up from now on either way.</p>
+        <div className="mt-3 grid grid-cols-3 gap-2">
+          {HISTORY_CHOICES.map((choice) => (
+            <button
+              key={choice.days}
+              type="button"
+              role="radio"
+              aria-checked={historyDays === choice.days}
+              onClick={() => setHistoryDays(choice.days)}
+              className={cx(
+                "rounded-xl px-2 py-2.5 text-sm font-medium ring-1 transition",
+                historyDays === choice.days
+                  ? "bg-zinc-900 text-white ring-zinc-900 dark:bg-white dark:text-zinc-900 dark:ring-white"
+                  : "text-zinc-600 ring-zinc-200 hover:bg-zinc-50 dark:text-zinc-300 dark:ring-white/10 dark:hover:bg-white/5",
+              )}
+            >
+              {choice.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {decide.isError && <p className="mt-4 rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:bg-rose-500/10 dark:text-rose-300">{decide.error.message}</p>}

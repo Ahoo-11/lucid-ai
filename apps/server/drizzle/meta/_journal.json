@@ -36,6 +36,13 @@
       "when": 1793369757891,
       "tag": "0004_device_links",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1793382214564,
+      "tag": "0005_history_syncs",
+      "breakpoints": true
     }
   ]
 }

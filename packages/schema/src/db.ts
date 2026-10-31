@@ -92,9 +92,31 @@ export const deviceLinks = pgTable("device_links", {
   status: text("status").notNull().default("pending"),
   /** Set on approval: the project the key is made for. */
   projectId: text("project_id").references(() => projects.id, { onDelete: "cascade" }),
+  /** Chosen on approval: how many days of past runs to bring in (0: none, the default). */
+  historyDays: integer("history_days").notNull().default(0),
   expiresAt: ts("expires_at").notNull(),
   createdAt: createdAt(),
 });
+
+/**
+ * An upload of past runs in progress (a Hermes backfill, `lucid import`), as
+ * reported by the sender, so the dashboard can say "12 of 40" until it's done.
+ */
+export const historySyncs = pgTable(
+  "history_syncs",
+  {
+    projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+    /** Made up by the sender, one per upload. */
+    id: text("id").notNull(),
+    harness: text("harness").notNull(),
+    total: integer("total").notNull(),
+    done: integer("done").notNull().default(0),
+    startedAt: ts("started_at").notNull().defaultNow(),
+    updatedAt: ts("updated_at").notNull().defaultNow(),
+    finishedAt: ts("finished_at"),
+  },
+  (t) => [primaryKey({ columns: [t.projectId, t.id] }), index("history_syncs_project_updated").on(t.projectId, t.updatedAt)],
+);
 
 /** Every payload exactly as received, so improved normalizers can reprocess history. */
 export const rawEvents = pgTable(

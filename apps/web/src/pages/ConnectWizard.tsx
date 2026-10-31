@@ -655,7 +655,7 @@ function CloudHermesSetup({ target }: { target: Target }) {
           <Fine>It opens here on any device where you're signed in. Check that the code matches the one in Hermes' reply.</Fine>
         </Instruction>
         <Instruction n={3} title="Send /restart to Hermes">
-          <Fine>Every chat shows up here from then on, plus your last 30 days.</Fine>
+          <Fine>Every chat shows up here from then on. Want older ones too? Choose that when you approve.</Fine>
         </Instruction>
       </Instructions>
       <More title="Rather use the server's terminal?">
@@ -693,7 +693,7 @@ function LocalSetup({ target, hermes }: { target: Target; hermes: boolean }) {
           <Fine>{os === "linux" ? "On a server, open the link it prints on any device where you're signed in." : "Check that the code on the page matches the one in your terminal."}</Fine>
         </Instruction>
         <Instruction n={3} title={hermes ? "Restart Hermes" : "Start a new Claude Code session"}>
-          <Fine>{hermes ? "Every chat shows up here from then on, plus your last 30 days." : "Every session shows up here as it happens, plus your last 7 days."}</Fine>
+          <Fine>{hermes ? "Every chat shows up here from then on." : "Every session shows up here as it happens."} Want older ones too? Choose that when you approve.</Fine>
         </Instruction>
       </Instructions>
       <AskAgent title={`Or let ${short} do it`} sub={`Paste this into ${short}. It runs the command and shows you the link to approve.`} prompt={devicePrompt(target)} />

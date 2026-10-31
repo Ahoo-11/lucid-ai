@@ -15,7 +15,8 @@ Configuration, first match wins (put them in ~/.hermes/.env on a server):
   ~/.lucid/config.json ({"endpoint": ..., "apiKey": ...}), written by `lucid connect hermes`
   http://127.0.0.1:4318 (a local Lucid server)
 Optional:
-  LUCID_BACKFILL_DAYS=30   also upload past sessions from state.db, once
+  LUCID_BACKFILL_DAYS=30   also upload past sessions from state.db, once, newest
+                           first, reporting progress to Lucid as it goes
 """
 
 from __future__ import annotations
@@ -111,7 +112,7 @@ def _spool_dir() -> Path:
 def _post_json(path: str, body: dict[str, Any], timeout: float) -> bool:
     """POST to Lucid, gzipped when large. True on a 2xx answer."""
     endpoint, key = _config()
-    headers = {"Content-Type": "application/json", "User-Agent": "lucid-hermes-plugin/0.2"}
+    headers = {"Content-Type": "application/json", "User-Agent": "lucid-hermes-plugin/0.3"}
     if key:
         headers["x-api-key"] = key
     data = json.dumps(body, separators=(",", ":"), default=str).encode("utf-8")
@@ -545,6 +546,40 @@ def _history_groups(db_path: Path, days: float) -> list[tuple[list[dict[str, Any
         connection.close()
 
 
+class _SyncProgress:
+    """Tells Lucid how far the backfill is ("12 of 40"), so the dashboard shows
+    it's still bringing runs in. Best effort: a Lucid without /v1/syncs, or a
+    lost report, never stops the backfill. A backfill that stops early simply
+    goes quiet, and Lucid stops showing it after a few minutes."""
+
+    EVERY_SECONDS = 2.0
+
+    def __init__(self, total: int) -> None:
+        self.id = uuid.uuid4().hex
+        self.total = total
+        self.done = 0
+        self.sent_at = 0.0
+        if total:
+            self._send()
+
+    def advance(self) -> None:
+        self.done += 1
+        if time.time() - self.sent_at >= self.EVERY_SECONDS:
+            self._send()
+
+    def finish(self) -> None:
+        if self.total:
+            self._send(finished=True)
+
+    def _send(self, finished: bool = False) -> None:
+        self.sent_at = time.time()
+        report = {"id": self.id, "harness": "hermes", "total": self.total, "done": self.done, "finished": finished}
+        try:
+            _post_json("/v1/syncs", report, 10.0)
+        except Exception:  # noqa: BLE001 (progress is decoration; the upload matters)
+            pass
+
+
 def _backfill(days: float) -> None:
     """Upload past sessions once per Lucid endpoint, from inside Hermes.
 
@@ -565,7 +600,9 @@ def _backfill(days: float) -> None:
             done = {}
         if endpoint in done or not db_path.exists():
             return
-        groups = _history_groups(db_path, days)
+        # Newest first, so the runs people remember show up first.
+        groups = list(reversed(_history_groups(db_path, days)))
+        sync = _SyncProgress(len(groups))
         imported = 0
         for sessions, messages in groups:
             try:
@@ -579,6 +616,8 @@ def _backfill(days: float) -> None:
             except (OSError, urllib.error.URLError, ValueError) as error:
                 log.warning("Lucid backfill stopped (%s); will retry on the next start", error)
                 return
+            sync.advance()
+        sync.finish()
         done[endpoint] = {"at": time.time(), "days": days, "conversations": imported}
         tmp = marker.with_name(f".{BACKFILL_MARKER}.tmp")
         tmp.write_text(json.dumps(done, indent=2), encoding="utf-8")

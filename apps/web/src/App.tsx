@@ -1,9 +1,11 @@
 import { UserButton } from "@clerk/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Loader2 } from "lucide-react";
 import type { ReactNode } from "react";
 import { NavLink, Navigate, Route, Routes, useLocation } from "react-router";
-import { api, useLiveUpdates } from "./api";
+import { type AuthConfig, api, useLiveUpdates } from "./api";
 import { ClerkGate } from "./auth";
+import { forgetCache, useAccountCache } from "./cache";
 import { Landing } from "./landing/Landing";
 import { PasswordSignIn, Splash, Unreachable } from "./pages/SignIn";
 import { Arena, ExperimentPage, NewExperiment } from "./pages/Arena";
@@ -12,6 +14,7 @@ import { Inbox, isRecurring } from "./pages/Inbox";
 import { LinkPage } from "./pages/Link";
 import { RunPage } from "./pages/Run";
 import { Runs } from "./pages/Runs";
+import { useSyncs } from "./syncs";
 import { cx } from "./ui";
 
 function Home() {
@@ -22,7 +25,7 @@ function Home() {
   return <Navigate to={hasRuns ? "/inbox" : "/connect"} replace />;
 }
 
-function Tab({ to, children, badge }: { to: string; children: string; badge?: number }) {
+function Tab({ to, children, badge, busy }: { to: string; children: string; badge?: number; busy?: string }) {
   return (
     <NavLink
       to={to}
@@ -34,6 +37,7 @@ function Tab({ to, children, badge }: { to: string; children: string; badge?: nu
       }
     >
       {children}
+      {busy && <Loader2 className="size-3.5 animate-spin opacity-70" aria-label={busy} />}
       {badge ? <span className="rounded-full bg-rose-500 px-1.5 text-[10px] font-semibold leading-4 text-white">{badge}</span> : null}
     </NavLink>
   );
@@ -46,7 +50,8 @@ function Tab({ to, children, badge }: { to: string; children: string; badge?: nu
  */
 export function App() {
   const { pathname } = useLocation();
-  const config = useQuery({ queryKey: ["auth-config"], queryFn: api.auth.config, staleTime: Number.POSITIVE_INFINITY, retry: 2 });
+  // The server writes this into the page, which saves a round trip before anything shows.
+  const config = useQuery({ queryKey: ["auth-config"], queryFn: api.auth.config, staleTime: Number.POSITIVE_INFINITY, retry: 2, initialData: window.__LUCID_CONFIG__ });
   if (pathname === "/landing") return <Landing />;
   if (config.isPending) return <Splash />;
   if (config.isError) return <Unreachable onRetry={() => void config.refetch()} />;
@@ -61,9 +66,16 @@ export function App() {
   return <BuiltInGate />;
 }
 
+declare global {
+  interface Window {
+    __LUCID_CONFIG__?: AuthConfig;
+  }
+}
+
 function BuiltInGate() {
   const { pathname } = useLocation();
   const me = useQuery({ queryKey: ["me"], queryFn: api.auth.me, staleTime: 60_000 });
+  useAccountCache(me.data?.mode === "local" ? "local" : me.data?.user ? `password:${me.data.user.email}` : null);
   if (me.isPending) return <Splash />;
   if (me.data?.mode === "hosted" && !me.data.user) return pathname === "/" ? <Landing /> : <PasswordSignIn signups={me.data.signups !== false} />;
   return <Shell account={me.data?.mode === "hosted" && me.data.user ? <AccountMenu email={me.data.user.email ?? ""} /> : null} />;
@@ -71,7 +83,13 @@ function BuiltInGate() {
 
 function AccountMenu({ email }: { email: string }) {
   const queryClient = useQueryClient();
-  const logout = useMutation({ mutationFn: api.auth.logout, onSuccess: () => queryClient.removeQueries({ predicate: (q) => q.queryKey[0] !== "auth-config" }) });
+  const logout = useMutation({
+    mutationFn: api.auth.logout,
+    onSuccess: () => {
+      forgetCache();
+      queryClient.removeQueries({ predicate: (q) => q.queryKey[0] !== "auth-config" });
+    },
+  });
   return (
     <div className="flex items-center gap-2 text-xs text-zinc-500">
       <span className="hidden max-w-40 truncate md:inline" title={email}>
@@ -87,6 +105,7 @@ function AccountMenu({ email }: { email: string }) {
 function Shell({ account }: { account: ReactNode }) {
   const live = useLiveUpdates();
   const issues = useQuery({ queryKey: ["issues"], queryFn: api.issues });
+  const syncing = useSyncs().active.length > 0;
   return (
     <div className="min-h-dvh">
       <header className="sticky top-0 z-20 border-b border-zinc-200 bg-white/80 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/80">
@@ -101,7 +120,9 @@ function Shell({ account }: { account: ReactNode }) {
             <Tab to="/inbox" badge={issues.data?.issues.filter(isRecurring).length}>
               Inbox
             </Tab>
-            <Tab to="/runs">Runs</Tab>
+            <Tab to="/runs" busy={syncing ? "Bringing in past runs" : undefined}>
+              Runs
+            </Tab>
             <Tab to="/arena">Arena</Tab>
             <Tab to="/connect">Connect</Tab>
           </nav>

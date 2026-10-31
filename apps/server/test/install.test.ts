@@ -25,7 +25,7 @@ describe("Hermes installer", () => {
     const script = await response.text();
     expect(script).toMatch(/^#!\/bin\/sh/);
     expect(script).toContain('LUCID_ENDPOINT="${LUCID_ENDPOINT:-https://lucid.example.com}"');
-    expect(script).toContain("Lucid plugin 0.2.0");
+    expect(script).toContain("Lucid plugin 0.3.0");
     expect(script).toContain("hermes plugins enable lucid");
   });
 

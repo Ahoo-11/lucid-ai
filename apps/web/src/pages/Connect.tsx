@@ -5,6 +5,7 @@ import { Link, useSearchParams } from "react-router";
 import { type ConnectStatus, api } from "../api";
 import { ago, harnessLabel, plural } from "../format";
 import { BRANDS, type Brand, BrandMark } from "../landing/logos";
+import { AgentSync } from "../syncs";
 import { Card, cx } from "../ui";
 import { ConnectWizard, LogoWell, findAgent } from "./ConnectWizard";
 
@@ -78,7 +79,18 @@ export function Connect() {
         )}
       </div>
 
-      {status.data && (empty ? <FirstAgent onStart={() => setOpen(true)} /> : <Connected data={status.data} />)}
+      {status.data ? (
+        empty ? (
+          <FirstAgent onStart={() => setOpen(true)} />
+        ) : (
+          <Connected data={status.data} />
+        )
+      ) : (
+        <Card className="flex items-center gap-4 px-5 py-4" aria-busy>
+          <span className="size-11 animate-pulse rounded-xl bg-zinc-100 dark:bg-zinc-800" />
+          <span className="h-4 w-40 animate-pulse rounded bg-zinc-100 dark:bg-zinc-800" />
+        </Card>
+      )}
       <Keys local={status.data?.localMode ?? true} />
 
       <ConnectWizard open={open} onClose={close} initialAgent={linked} newKey={newKey} onKey={setNewKey} />
@@ -167,6 +179,7 @@ function Connected({ data }: { data: ConnectStatus }) {
                 <div className="truncate text-sm text-zinc-500 dark:text-zinc-400">
                   {plural(row.events, "event")} via {row.via.join(" and ")}
                 </div>
+                <AgentSync harness={row.id} />
               </div>
               <div className="flex shrink-0 items-center gap-2 text-sm text-zinc-500 dark:text-zinc-400" title={row.lastAt ?? undefined}>
                 <span className={cx("size-2 rounded-full", recent ? "bg-emerald-500" : "bg-zinc-300 dark:bg-zinc-600")} />

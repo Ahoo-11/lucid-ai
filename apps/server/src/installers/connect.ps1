@@ -86,11 +86,14 @@
       $answer = $null
       try { $answer = Post '/api/links/poll' @{ deviceCode = $start.deviceCode } } catch { }
       if (-not $answer) { continue }
-      if ($answer.status -eq 'approved') { $key = $answer.key }
+      if ($answer.status -eq 'approved') { $key = $answer.key; $answered = $answer }
       elseif ($answer.status -eq 'denied') { throw 'the request was declined in Lucid.' }
       elseif ($answer.status -eq 'expired' -or $answer.status -eq 'claimed') { throw 'the code expired. Run this again for a new one.' }
     }
     if (-not $key) { throw 'no approval after 10 minutes. Run this again for a new code.' }
+    # Past runs come in only if the person asked for them on the Approve page.
+    $historyDays = 0
+    if ($answered.historyDays) { $historyDays = [int]$answered.historyDays }
     Write-Host 'Approved.'
     Write-Host ''
 
@@ -102,11 +105,12 @@
         Move-Item -Force (Join-Path $dest "$file.part") (Join-Path $dest $file)
       }
       # Settings go in Hermes' own .env, which it loads before plugins. The
-      # plugin uploads the last 30 days once, then remembers it did.
+      # plugin uploads past chats once, after the restart, then remembers it did.
       $envFile = Join-Path $hermesDir '.env'
       $lines = @()
       if (Test-Path $envFile) { $lines = @(Get-Content $envFile | Where-Object { $_ -notmatch '^(LUCID_ENDPOINT|LUCID_API_KEY|LUCID_BACKFILL_DAYS)=' }) }
-      $lines += "LUCID_ENDPOINT=$endpoint", "LUCID_API_KEY=$key", 'LUCID_BACKFILL_DAYS=30'
+      $lines += "LUCID_ENDPOINT=$endpoint", "LUCID_API_KEY=$key"
+      if ($historyDays -gt 0) { $lines += "LUCID_BACKFILL_DAYS=$historyDays" }
       # UTF-8 without a byte-order mark, which would break the first setting.
       [IO.File]::WriteAllLines($envFile, [string[]]$lines)
       if ((Has 'hermes') -and (Run 'hermes' @('plugins', 'enable', 'lucid')).ok) {
@@ -114,6 +118,7 @@
       } else {
         Write-Host '- Hermes Agent: plugin installed. Run "hermes plugins enable lucid", then restart Hermes.' -ForegroundColor Green
       }
+      if ($historyDays -gt 0) { Write-Host "  After the restart it brings in your last $historyDays days of chats. Lucid shows the progress." }
     }
 
     if ($agents -contains 'claude-code') {
@@ -125,10 +130,13 @@
       $connected = Run 'node' @($cli, 'connect', 'claude-code', '--endpoint', $endpoint, '--key', $key)
       if (-not $connected.ok) { throw "couldn't update Claude Code's settings: $($connected.out)" }
       Write-Host '- Claude Code: connected. Start a new Claude Code session and it shows up in Lucid.' -ForegroundColor Green
-      Write-Host '  Uploading your last 7 days of sessions...'
-      $imported = Run 'node' @($cli, 'import', 'claude-code', '--days', '7', '--endpoint', $endpoint, '--key', $key)
-      $last = @($imported.out -split "`r?`n" | Where-Object { $_.Trim() }) | Select-Object -Last 1
-      if ($last) { Write-Host "  $last" }
+      if ($historyDays -gt 0) {
+        # In the background, so this command is done now; Lucid shows the progress.
+        # Start-Process joins arguments with spaces, so the path gets its own quotes.
+        $arguments = '"{0}" import claude-code --days {1} --endpoint {2} --key {3}' -f $cli, $historyDays, $endpoint, $key
+        Start-Process -FilePath (Get-Command node).Source -ArgumentList $arguments -WindowStyle Hidden -RedirectStandardOutput (Join-Path $lucidDir 'import.log') -RedirectStandardError (Join-Path $lucidDir 'import-errors.log')
+        Write-Host "  Bringing in your last $historyDays days of sessions in the background. Lucid shows the progress."
+      }
     }
 
     Write-Host ''

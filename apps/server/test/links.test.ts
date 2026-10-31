@@ -93,10 +93,53 @@ describe("connect links (run one command, click Approve)", () => {
     expect(form.status).toBe(415);
   });
 
+  it("brings in past runs only when the approver asks for them", async () => {
+    const { call, signUp } = await hosted();
+    const ana = await signUp("ana@example.com");
+    const approveWith = async (body: Record<string, unknown>) => {
+      const { deviceCode, userCode } = (await call("POST", "/api/links/start", { machine: "box", agents: ["hermes"] })).body as { deviceCode: string; userCode: string };
+      await call("POST", `/api/links/${userCode}/approve`, body, { cookie: ana.cookie });
+      return (await call("POST", "/api/links/poll", { deviceCode })).body!.historyDays;
+    };
+    expect(await approveWith({})).toBe(0);
+    expect(await approveWith({ historyDays: 30 })).toBe(30);
+    expect(await approveWith({ historyDays: 7 })).toBe(7);
+    expect(await approveWith({ historyDays: 9999 })).toBe(0);
+  });
+
   it("reads codes however people type them", () => {
     expect(normalizeCode("wxyz 2345")).toBe("WXYZ-2345");
     expect(normalizeCode("WXYZ-2345")).toBe("WXYZ-2345");
     expect(normalizeCode("WXYZ-234")).toBeNull();
+  });
+});
+
+describe("syncing past runs", () => {
+  it("shows an upload's progress until it finishes, and only to its own project", async () => {
+    const { call, db, signUp } = await hosted();
+    const ana = await signUp("ana@example.com");
+    const key = (await call("POST", "/api/keys", { name: "laptop" }, { cookie: ana.cookie })).body!.key as string;
+    const report = (body: Record<string, unknown>) => call("POST", "/v1/syncs", body, { "x-api-key": key });
+    const shown = async (cookie: string) => (await call("GET", "/api/syncs", undefined, { cookie })).body!.syncs as Record<string, unknown>[];
+
+    expect((await call("POST", "/v1/syncs", { id: "s1", harness: "hermes", total: 40, done: 0 })).status).toBe(401);
+    expect((await report({ id: "s1", harness: "hermes", total: 40, done: 0 })).status).toBe(200);
+    expect((await report({ id: "s1", harness: "hermes", total: 40, done: 12 })).status).toBe(200);
+    expect(await shown(ana.cookie)).toMatchObject([{ id: "s1", harness: "hermes", total: 40, done: 12, finished: false }]);
+
+    const bo = await signUp("bo@example.com");
+    expect(await shown(bo.cookie)).toEqual([]);
+
+    await report({ id: "s1", harness: "hermes", total: 40, done: 40, finished: true });
+    expect(await shown(ana.cookie)).toMatchObject([{ done: 40, finished: true }]);
+
+    // A sender that went quiet (Hermes closed mid-way) drops off rather than spinning forever.
+    await report({ id: "s2", harness: "claude-code", total: 5, done: 1 });
+    await db.update(schema.historySyncs).set({ updatedAt: new Date(Date.now() - 4 * 60_000) }).where(eq(schema.historySyncs.id, "s2"));
+    expect((await shown(ana.cookie)).map((s) => s.id)).toEqual(["s1"]);
+
+    expect((await report({ id: "bad id!", harness: "hermes", total: 1 })).status).toBe(400);
+    expect((await report({ id: "s3", harness: "hermes", total: -1 })).status).toBe(400);
   });
 });
 

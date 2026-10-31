@@ -109,6 +109,9 @@ export type ConnectStatus = {
 
 export type ApiKey = { id: string; name: string; prefix: string; createdAt: string; lastUsedAt: string | null };
 
+/** An upload of past runs (Hermes backfill, `lucid import`): going, or just finished. */
+export type HistorySync = { id: string; harness: string; total: number; done: number; finished: boolean; startedAt: string };
+
 /** A computer asking to connect, from the one-command installer. "taken": another account approved it. */
 export type DeviceLink =
   | { code: string; status: "taken" }
@@ -217,8 +220,10 @@ export const api = {
   revokeKey: (id: string) => request<{ ok: true }>(`/keys/${id}`, { method: "DELETE" }),
   links: {
     get: (code: string) => request<DeviceLink>(`/links/${encodeURIComponent(code)}`),
-    decide: (code: string, decision: "approve" | "deny") => request<{ ok: true }>(`/links/${encodeURIComponent(code)}/${decision}`, { method: "POST", body: "{}" }),
+    decide: (code: string, decision: "approve" | "deny", historyDays = 0) =>
+      request<{ ok: true }>(`/links/${encodeURIComponent(code)}/${decision}`, { method: "POST", body: JSON.stringify({ historyDays }) }),
   },
+  syncs: () => request<{ syncs: HistorySync[] }>("/syncs"),
   arena: {
     models: () => request<{ configured: boolean; models: ArenaModel[]; suggestedJudge: string | null }>("/arena/models"),
     check: (stepId: string) => request<{ ok: true; messages: number; tools: number } | { ok: false; reason: string }>(`/arena/check?step=${stepId}`),

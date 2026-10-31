@@ -24,6 +24,8 @@ const TTL_MS = 10 * 60_000;
 const POLL_SECONDS = 2;
 /** What the installers can connect today. */
 const AGENTS: Record<string, string> = { "claude-code": "Claude Code", hermes: "Hermes Agent" };
+/** Past runs people can ask for on the Approve page; none unless they choose. */
+const HISTORY_DAYS = new Set([0, 7, 30]);
 // 32 letters and digits that can't be misread (no 0/O, 1/I): 8 of them, no modulo bias.
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
@@ -125,11 +127,12 @@ export function linkRoutes(ctx: AppContext) {
       .update(deviceLinks)
       .set({ status: "claimed" })
       .where(and(eq(deviceLinks.id, row.id), eq(deviceLinks.status, "approved")))
-      .returning({ projectId: deviceLinks.projectId });
+      .returning({ projectId: deviceLinks.projectId, historyDays: deviceLinks.historyDays });
     if (!claimed?.projectId) return c.json({ status: "claimed" });
     const names = row.agents.map((agent) => AGENTS[agent] ?? agent).join(", ");
     const key = await createApiKey(db, claimed.projectId, `${row.machine} (${names})`);
-    return c.json({ status: "approved", key: key.key, endpoint: publicEndpoint(c) });
+    // historyDays: whether to bring in past runs, as chosen on the Approve page.
+    return c.json({ status: "approved", key: key.key, endpoint: publicEndpoint(c), historyDays: claimed.historyDays });
   });
 
   const signedIn = requireProject(ctx);
@@ -148,10 +151,12 @@ export function linkRoutes(ctx: AppContext) {
     // JSON only: a cross-site form can't send it, so no one can approve on your behalf.
     if (!(c.req.header("content-type") ?? "").includes("application/json")) return c.json({ error: "Send JSON" }, 415);
     const code = normalizeCode(c.req.param("code") ?? "");
+    const body = (await c.req.json().catch(() => ({}))) as { historyDays?: unknown };
+    const historyDays = to === "approved" && HISTORY_DAYS.has(Number(body.historyDays)) ? Number(body.historyDays) : 0;
     const [updated] = code
       ? await db
           .update(deviceLinks)
-          .set({ status: to, projectId: to === "approved" ? c.get("projectId") : null })
+          .set({ status: to, projectId: to === "approved" ? c.get("projectId") : null, historyDays })
           .where(and(eq(deviceLinks.userCode, code), eq(deviceLinks.status, "pending"), gt(deviceLinks.expiresAt, new Date())))
           .returning({ id: deviceLinks.id })
       : [];

@@ -13,6 +13,7 @@ import { publicEndpoint } from "../install";
 import { createApiKey } from "../keys";
 import { batchFor } from "../normalizers";
 import { upstreams } from "../proxy";
+import { currentSyncs } from "../syncs";
 import { writeBatch } from "../writer";
 
 const { apiKeys, blobs, rawEvents, runs, sessions, steps } = schema;
@@ -252,6 +253,8 @@ export function apiRoutes(ctx: AppContext) {
       .limit(100);
     return c.json({ sessions: rows });
   });
+
+  app.get("/syncs", async (c) => c.json({ syncs: await currentSyncs(db, c.get("projectId")) }));
 
   app.get("/connect/status", async (c) => {
     const projectId = c.get("projectId");

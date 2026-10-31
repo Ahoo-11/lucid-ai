@@ -7,6 +7,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useSyncExternalStore } from "react";
 import { useLocation } from "react-router";
 import { type Me, api, setTokenSource } from "./api";
+import { forgetCache, useAccountCache } from "./cache";
 import { Landing } from "./landing/Landing";
 import { AuthLayout, Splash } from "./pages/SignIn";
 import { Card } from "./ui";
@@ -104,11 +105,14 @@ function SessionBridge() {
     setTokenSource(() => getToken());
     return () => setTokenSource(null);
   }, [getToken]);
+  // Before the pages below render, so they paint from the last visit at once.
+  useAccountCache(isLoaded && userId ? `clerk:${userId}` : null);
   const previous = useRef<string | null | undefined>(undefined);
   useEffect(() => {
     if (!isLoaded) return;
     if (previous.current !== undefined && previous.current !== (userId ?? null)) {
       queryClient.removeQueries({ predicate: (query) => query.queryKey[0] !== "auth-config" });
+      if (!userId) forgetCache();
     }
     previous.current = userId ?? null;
   }, [isLoaded, userId, queryClient]);

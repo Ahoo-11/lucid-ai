@@ -7,7 +7,7 @@ import { cpSync, existsSync, readdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { postJson, readConfig, writeConfig } from "./config";
+import { postJson, readConfig, syncProgress, writeConfig } from "./config";
 
 type Target = { endpoint: string; apiKey?: string };
 type Row = Record<string, unknown>;
@@ -110,11 +110,14 @@ export async function importHermes(target: Target, options: { days: number; home
     }
 
     const messagesFor = db.prepare(`select ${messageCols.join(", ")} from messages where session_id = ? order by timestamp, id`);
+    const sync = syncProgress(target, "hermes", groups.size);
+    await sync.start();
     let imported = 0;
     let runs = 0;
     let skipped = 0;
     let failed = 0;
-    for (const [rootId, sessions] of groups) {
+    // Newest first, so the conversations people remember show up first.
+    for (const [rootId, sessions] of [...groups].reverse()) {
       const messages = sessions.flatMap((s) => messagesFor.all(String(s.id)) as Row[]);
       const title = String(byId.get(rootId)?.title ?? rootId);
       try {
@@ -132,7 +135,9 @@ export async function importHermes(target: Target, options: { days: number; home
         failed++;
         options.onProgress?.(`  ✗ ${title}: ${(error as Error).message}`);
       }
+      await sync.advance();
     }
+    await sync.finish();
     return { sessions: imported, runs, skipped, failed };
   } finally {
     db.close();

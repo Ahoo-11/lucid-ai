@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -43,6 +44,32 @@ export function resolveTarget(flags: { endpoint?: string; key?: string }) {
     config.apiKey ??
     (existsSync(localKeyFile) ? readFileSync(localKeyFile, "utf8").trim() : undefined);
   return { endpoint, apiKey };
+}
+
+/**
+ * Tells Lucid how far an upload of past runs is ("12 of 40"), so the dashboard
+ * shows it's still syncing. Best effort: a lost report never stops the upload.
+ */
+export function syncProgress(target: { endpoint: string; apiKey?: string }, harness: string, total: number) {
+  const id = randomUUID();
+  let done = 0;
+  let sentAt = 0;
+  const send = async (finished: boolean) => {
+    sentAt = Date.now();
+    await postJson(target, "/v1/syncs", { id, harness, total, done, finished }, 5_000).catch(() => {});
+  };
+  return {
+    start: async () => {
+      if (total) await send(false);
+    },
+    advance: async () => {
+      done++;
+      if (Date.now() - sentAt >= 2_000) await send(false);
+    },
+    finish: async () => {
+      if (total) await send(true);
+    },
+  };
 }
 
 export async function postJson(target: { endpoint: string; apiKey?: string }, path: string, body: unknown, timeoutMs = 15_000) {

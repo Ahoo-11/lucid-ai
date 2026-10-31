@@ -6,7 +6,7 @@ import { appendFileSync, copyFileSync, existsSync, readdirSync, statSync } from 
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { LUCID_HOME, postJson, readConfig, readJson, writeConfig, writeJson } from "./config";
+import { LUCID_HOME, postJson, readConfig, readJson, syncProgress, writeConfig, writeJson } from "./config";
 import { sessionTranscripts, syncTranscript } from "./transcripts";
 
 type Target = { endpoint: string; apiKey?: string };
@@ -134,26 +134,36 @@ export async function importClaudeCode(target: Target, options: { days: number; 
   const root = join(homedir(), ".claude", "projects");
   if (!existsSync(root)) return { sessions: 0, lines: 0, failed: 0 };
   const since = Date.now() - options.days * 24 * 60 * 60 * 1000;
-  let sessions = 0;
-  let lines = 0;
-  let failed = 0;
+  const found: { project: string; name: string; path: string; changed: number }[] = [];
   for (const project of readdirSync(root)) {
     const dir = join(root, project);
     if (!statSync(dir).isDirectory()) continue;
     for (const name of readdirSync(dir)) {
       if (!name.endsWith(".jsonl")) continue;
       const path = join(dir, name);
-      if (statSync(path).mtimeMs < since) continue;
-      // One unreadable session must not stop the rest of the import.
-      try {
-        for (const file of sessionTranscripts(path)) lines += (await syncTranscript(target, file)).sent;
-        sessions++;
-        options.onProgress?.(`  ${project} / ${name}`);
-      } catch (error) {
-        failed++;
-        options.onProgress?.(`  ✗ ${project} / ${name}: ${(error as Error).message.slice(0, 200)}`);
-      }
+      const changed = statSync(path).mtimeMs;
+      if (changed >= since) found.push({ project, name, path, changed });
     }
   }
+  // Newest first, so the sessions people remember show up first.
+  found.sort((a, b) => b.changed - a.changed);
+  const sync = syncProgress(target, "claude-code", found.length);
+  await sync.start();
+  let sessions = 0;
+  let lines = 0;
+  let failed = 0;
+  for (const { project, name, path } of found) {
+    // One unreadable session must not stop the rest of the import.
+    try {
+      for (const file of sessionTranscripts(path)) lines += (await syncTranscript(target, file)).sent;
+      sessions++;
+      options.onProgress?.(`  ${project} / ${name}`);
+    } catch (error) {
+      failed++;
+      options.onProgress?.(`  ✗ ${project} / ${name}: ${(error as Error).message.slice(0, 200)}`);
+    }
+    await sync.advance();
+  }
+  await sync.finish();
   return { sessions, lines, failed };
 }

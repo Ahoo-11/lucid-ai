@@ -4,7 +4,7 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import { sql } from "drizzle-orm";
 import { type Context, Hono } from "hono";
 import { compress } from "hono/compress";
-import { authRoutes } from "./auth";
+import { authConfig, authRoutes, clerkFrontendHost } from "./auth";
 import type { AppContext } from "./context";
 import { createIngest } from "./ingestService";
 import { SAFE_URL, installRoutes, publicEndpoint } from "./install";
@@ -41,7 +41,17 @@ export function createApp(ctx: AppContext) {
   // The built dashboard, when present (npm run build). In development Vite
   // serves it and proxies /api and /v1 here.
   if (existsSync(WEB_DIST)) {
-    const index = readFileSync(`${WEB_DIST}/index.html`, "utf8");
+    // The sign-in setup goes into the page, so the app needn't ask for it
+    // first; and the browser starts connecting to Clerk while the script loads.
+    const config = authConfig(ctx);
+    const clerkHost = config.publishableKey ? clerkFrontendHost(config.publishableKey) : null;
+    const head = [
+      `<script>window.__LUCID_CONFIG__=${JSON.stringify(config).replace(/</g, "\\u003c")}</script>`,
+      clerkHost && `<link rel="preconnect" href="https://${clerkHost}" crossorigin />`,
+    ]
+      .filter(Boolean)
+      .join("\n    ");
+    const index = readFileSync(`${WEB_DIST}/index.html`, "utf8").replace("</head>", `  ${head}\n  </head>`);
     // Link previews need absolute URLs. The origin can come from request
     // headers, so only a plain URL goes into the page; otherwise they stay relative.
     const page = (c: Context) => {

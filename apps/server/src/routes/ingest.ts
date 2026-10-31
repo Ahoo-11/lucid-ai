@@ -19,6 +19,7 @@ import { type Ingest, describeError, projectForKey } from "../ingestService";
 import { keyFromHeaders } from "../keys";
 import { batchFor } from "../normalizers";
 import { decodeLogs, decodeTraces } from "../otlpProto";
+import { type SyncReport, reportSync } from "../syncs";
 
 const { runs, sessions, transcriptCursors } = schema;
 const MAX_BODY = 32 * 1024 * 1024;
@@ -107,6 +108,12 @@ export function ingestRoutes(ctx: AppContext, ingest: Ingest) {
     // Prefixed OTLP paths (e.g. /otlp/v1/traces) skip the /v1/* middleware.
     if (!c.get("projectId") && !(await authenticate(c))) return c.json({ error: UNAUTHORIZED }, 401);
     return otlp(c, match[1] as Signal);
+  });
+
+  // Progress of an upload of past runs: { id, harness, total, done, finished? }.
+  app.post("/v1/syncs", async (c) => {
+    const result = await reportSync(ctx.db, c.get("projectId"), (await c.req.json().catch(() => ({}))) as SyncReport);
+    return "error" in result ? c.json(result, 400) : c.json(result);
   });
 
   app.post("/v1/hooks/:harness", async (c) => {

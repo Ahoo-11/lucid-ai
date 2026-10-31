@@ -3,6 +3,7 @@ import { Activity, Search } from "lucide-react";
 import { Link, useSearchParams } from "react-router";
 import { type RunListItem, api } from "../api";
 import { ago, cost, duration, harnessLabel, plural } from "../format";
+import { SyncBanner } from "../syncs";
 import { Card, Empty, RunDot, Stat, cx } from "../ui";
 
 const STATUS_FILTERS = [
@@ -55,6 +56,8 @@ export function Runs() {
           <Stat label="Avg duration" value={duration(day?.avgDurationMs)} hint="Average time from the request to the agent's last step" />
         </Card>
       </div>
+
+      <SyncBanner />
 
       <div className="flex flex-wrap items-center gap-2">
         <label className="relative min-w-60 flex-1">
