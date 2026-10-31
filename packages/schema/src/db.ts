@@ -134,6 +134,10 @@ export const issueExplanations = pgTable(
     title: text("title"),
     why: text("why"),
     fix: text("fix"),
+    /** The instruction it proposes for the agent; applied only once the owner approves (see lessons). */
+    lesson: text("lesson"),
+    /** A setting or permission only the owner should change; never applied by Lucid. */
+    manual: text("manual"),
     error: text("error"),
     /** What the diagnosis cost, to tune the prompt before any rule runs them on its own. */
     inputTokens: integer("input_tokens"),
@@ -142,6 +146,32 @@ export const issueExplanations = pgTable(
     createdAt: createdAt(),
   },
   (t) => [primaryKey({ columns: [t.projectId, t.issueId] })],
+);
+
+/**
+ * An instruction the owner approved for one kind of agent ("When running as a
+ * cron job, never use execute_code"). The agent's Lucid plugin fetches the
+ * active ones and adds them to every turn; turning one off removes it. Nothing
+ * on the agent's machine is edited.
+ */
+export const lessons = pgTable(
+  "lessons",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+    /** Which agent it's for (hermes, …): only that agent's plugin receives it. */
+    harness: text("harness").notNull(),
+    /** The Inbox problem it fixes, to count that problem's failures since. */
+    issueId: text("issue_id"),
+    text: text("text").notNull(),
+    /** active or off. */
+    status: text("status").notNull().default("active"),
+    createdAt: createdAt(),
+    /** First time an agent fetched it while active: from then on it's in the agent's turns. */
+    deliveredAt: ts("delivered_at"),
+    turnedOffAt: ts("turned_off_at"),
+  },
+  (t) => [index("lessons_project_harness").on(t.projectId, t.harness)],
 );
 
 /** Every payload exactly as received, so improved normalizers can reprocess history. */

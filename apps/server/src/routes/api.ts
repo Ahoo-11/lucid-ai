@@ -10,6 +10,7 @@ import { CLOSED, resolveAccount } from "../auth";
 import { arenaRoutes } from "../ee/arena/routes";
 import { createExplainer } from "../explain";
 import { errorSignature, hintFor } from "../insights";
+import { LESSON_HARNESSES, applyLesson, cleanLesson, lessonsForIssues, runsSince, setLessonStatus } from "../lessons";
 import { publicEndpoint } from "../install";
 import { createApiKey } from "../keys";
 import { batchFor } from "../normalizers";
@@ -171,18 +172,36 @@ export function apiRoutes(ctx: AppContext) {
         error: steps.error,
         startedAt: steps.startedAt,
         runName: runs.name,
+        harness: runs.harness,
       })
       .from(steps)
       .innerJoin(runs, eq(runs.id, steps.runId))
       .where(and(eq(steps.projectId, projectId), eq(steps.status, "error")))
       .orderBy(sql`${steps.startedAt} desc nulls last`)
       .limit(5000);
-    const groups = new Map<string, { key: string; kind: string; toolName: string | null; signature: string; sample: string | null; occurrences: number; runIds: Set<string>; lastSeen: Date | null; firstSeen: Date | null; examples: { runId: string; runName: string | null }[] }>();
+    type Group = {
+      key: string;
+      kind: string;
+      toolName: string | null;
+      signature: string;
+      sample: string | null;
+      /** The agent it happened in most recently: the one a lesson for it goes to. */
+      harness: string;
+      occurrences: number;
+      runIds: Set<string>;
+      lastSeen: Date | null;
+      firstSeen: Date | null;
+      examples: { runId: string; runName: string | null }[];
+      /** When each failure happened, to count the ones after a fix went live. */
+      failedAt: number[];
+    };
+    const groups = new Map<string, Group>();
     for (const row of failed) {
       const signature = errorSignature(row.error);
       const key = `${row.kind}\u0000${row.toolName ?? ""}\u0000${signature}`;
-      const group = groups.get(key) ?? { key, kind: row.kind, toolName: row.toolName, signature, sample: row.error, occurrences: 0, runIds: new Set(), lastSeen: row.startedAt, firstSeen: row.startedAt, examples: [] };
+      const group = groups.get(key) ?? { key, kind: row.kind, toolName: row.toolName, signature, sample: row.error, harness: row.harness, occurrences: 0, runIds: new Set(), lastSeen: row.startedAt, firstSeen: row.startedAt, examples: [], failedAt: [] };
       group.occurrences++;
+      if (row.startedAt) group.failedAt.push(row.startedAt.getTime());
       if (!group.runIds.has(row.runId) && group.examples.length < 5) group.examples.push({ runId: row.runId, runName: row.runName });
       group.runIds.add(row.runId);
       if (row.startedAt && (!group.firstSeen || row.startedAt < group.firstSeen)) group.firstSeen = row.startedAt;
@@ -198,7 +217,40 @@ export function apiRoutes(ctx: AppContext) {
     const issues = await loadIssues(projectId);
     // Only what was already asked for: opening the Inbox never spends model credits.
     const diagnoses = await explainer.diagnoses(projectId, issues.slice(0, 200));
-    return c.json({ issues: issues.map((issue) => ({ ...issue, diagnosis: diagnoses.get(issue.id) ?? null })), diagnosisModel: explainer.enabled ? ctx.ai?.model : null });
+    const applied = await lessonsForIssues(db, projectId, issues.slice(0, 200).map((issue) => issue.id));
+    const shown = await Promise.all(
+      issues.map(async ({ failedAt, ...issue }) => {
+        const lesson = applied.get(issue.id);
+        // A fix's results: this problem's failures, and the agent's runs, since it went live.
+        const since = lesson?.status === "active" && lesson.deliveredAt ? new Date(lesson.deliveredAt) : null;
+        return {
+          ...issue,
+          diagnosis: diagnoses.get(issue.id) ?? null,
+          lesson: lesson ? { ...lesson, failuresSince: since ? failedAt.filter((t) => t > since.getTime()).length : null, runsSince: since ? await runsSince(db, projectId, lesson.harness, since) : null } : null,
+          // Whether Lucid can apply a lesson in this agent by itself (or it's one to copy).
+          lessonsApply: LESSON_HARNESSES.has(issue.harness),
+        };
+      }),
+    );
+    return c.json({ issues: shown, diagnosisModel: explainer.enabled ? ctx.ai?.model : null });
+  });
+
+  // Approving a lesson: the owner's own words (edited or as proposed) go to that agent from its next turn.
+  app.post("/issues/:id/lesson", async (c) => {
+    if (!(c.req.header("content-type") ?? "").includes("application/json")) return c.json({ error: "Send JSON" }, 415);
+    const projectId = c.get("projectId");
+    const text = cleanLesson(((await c.req.json().catch(() => ({}))) as { text?: unknown }).text);
+    if (!text) return c.json({ error: "Write the lesson first." }, 400);
+    const issue = (await loadIssues(projectId)).find((candidate) => candidate.id === c.req.param("id"));
+    if (!issue) return c.json({ error: "That problem isn't in the Inbox anymore." }, 404);
+    if (!LESSON_HARNESSES.has(issue.harness)) return c.json({ error: `Lucid can't apply lessons in ${issue.harness} yet. Copy it into the agent's instructions instead.` }, 409);
+    return c.json({ lesson: await applyLesson(db, projectId, { issueId: issue.id, harness: issue.harness, text }) }, 201);
+  });
+
+  app.post("/lessons/:id/:status{on|off}", async (c) => {
+    if (!(c.req.header("content-type") ?? "").includes("application/json")) return c.json({ error: "Send JSON" }, 415);
+    const lesson = await setLessonStatus(db, c.get("projectId"), c.req.param("id"), c.req.param("status") === "on" ? "active" : "off");
+    return lesson ? c.json({ lesson }) : c.json({ error: "No such lesson" }, 404);
   });
 
   // A diagnosis runs only when someone asks for one (the Diagnose button), so

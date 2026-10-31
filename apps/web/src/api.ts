@@ -99,12 +99,44 @@ export type Issue = {
   fix: string;
   /** Written by a model (Muse Spark) from the failing steps, when someone asks; null until then. */
   diagnosis: Diagnosis | null;
+  /** The agent it happened in (most recently): the one a lesson goes to. */
+  harness: string;
+  /** Whether Lucid can apply a lesson in that agent itself; otherwise it's one to copy. */
+  lessonsApply: boolean;
+  /** The lesson applied for this problem, with its results since it went live. */
+  lesson: AppliedLesson | null;
 };
 
 export type Diagnosis =
   | { status: "pending" }
-  | { status: "ready"; title: string; why: string; fix: string; model: string; at: string; inputTokens: number | null; outputTokens: number | null; latencyMs: number | null }
+  | {
+      status: "ready";
+      title: string;
+      why: string;
+      fix: string;
+      /** The instruction proposed for the agent; applied only on approval. */
+      lesson: string | null;
+      /** A settings change only the owner should make; Lucid never applies it. */
+      manual: string | null;
+      model: string;
+      at: string;
+      inputTokens: number | null;
+      outputTokens: number | null;
+      latencyMs: number | null;
+    }
   | { status: "failed"; error: string; model: string; at: string };
+
+export type AppliedLesson = {
+  id: string;
+  text: string;
+  harness: string;
+  status: "active" | "off";
+  createdAt: string;
+  /** When the agent picked it up; null while waiting. */
+  deliveredAt: string | null;
+  failuresSince: number | null;
+  runsSince: number | null;
+};
 
 export type ConnectStatus = {
   endpoint: string;
@@ -225,6 +257,10 @@ export const api = {
   issues: () => request<{ issues: Issue[]; diagnosisModel?: string | null }>("/issues"),
   /** Asks the model to diagnose one problem; spends credits, so only on a click. */
   diagnose: (issueId: string) => request<{ diagnosis: Diagnosis }>(`/issues/${encodeURIComponent(issueId)}/diagnose`, { method: "POST", body: "{}" }),
+  /** Approves a lesson (as written here) for the problem's agent, from its next turn. */
+  applyLesson: (issueId: string, text: string) =>
+    request<{ lesson: AppliedLesson }>(`/issues/${encodeURIComponent(issueId)}/lesson`, { method: "POST", body: JSON.stringify({ text }) }),
+  setLesson: (lessonId: string, on: boolean) => request<{ lesson: AppliedLesson }>(`/lessons/${encodeURIComponent(lessonId)}/${on ? "on" : "off"}`, { method: "POST", body: "{}" }),
   connect: () => request<ConnectStatus>("/connect/status"),
   keys: () => request<{ keys: ApiKey[] }>("/keys"),
   createKey: (name: string) => request<ApiKey & { key: string }>("/keys", { method: "POST", body: JSON.stringify({ name }) }),

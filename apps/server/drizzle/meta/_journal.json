@@ -57,6 +57,13 @@
       "when": 1793432978909,
       "tag": "0007_diagnosis_cost",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1793460331340,
+      "tag": "0008_lessons",
+      "breakpoints": true
     }
   ]
 }

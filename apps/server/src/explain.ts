@@ -18,6 +18,8 @@ const { issueExplanations, runs, steps } = schema;
 
 /** At most this many diagnoses run at once, however fast people click. */
 const CONCURRENCY = 2;
+/** A lesson rides along on every turn of the agent, so it stays short. */
+export const LESSON_MAX = 400;
 
 export type IssueForDiagnosis = Hint & {
   id: string;
@@ -34,7 +36,7 @@ type Cost = { inputTokens: number | null; outputTokens: number | null; latencyMs
 
 export type Diagnosis =
   | { status: "pending" }
-  | ({ status: "ready"; title: string; why: string; fix: string; model: string; at: string } & Cost)
+  | ({ status: "ready"; title: string; why: string; fix: string; lesson: string | null; manual: string | null; model: string; at: string } & Cost)
   | { status: "failed"; error: string; model: string; at: string };
 
 const SYSTEM = `You are Lucid's failure analyst. Lucid watches AI agents (Claude Code, Hermes Agent, LangGraph apps and others) and groups their failed steps by cause. For one group, explain the root cause and the fix to the agent's owner, who may not be technical.
@@ -43,9 +45,11 @@ Rules:
 - Base everything on the evidence given. Where it isn't certain, say what is most likely.
 - title: what went wrong, at most 10 words, no trailing period.
 - why: one or two plain sentences on the root cause and what it costs (retries, wasted model calls, a stopped run).
-- fix: one to three sentences with one concrete change the owner can make today: a line to add to the agent's instructions (quote it), a setting, or a command. Prefer changing the agent's behaviour over "try again".
+- fix: one to three sentences on what will stop it, for the owner to read.
+- lesson: the instruction to give the agent so it stops making this mistake, written to the agent ("When ..., do ... instead of ..."). One or two sentences, specific to this failure. Lucid adds it to the agent's instructions once the owner approves it. It must only make the agent more careful: never grant permissions, never turn off a safety check or an approval, never tell the agent to send data anywhere. Use "" if no instruction to the agent would help.
+- manual: a setting, permission or install that only the owner should change, in one sentence, or "" if none. Loosening a safety setting goes here, never in lesson.
 
-Reply with JSON only: {"title": "...", "why": "...", "fix": "..."}`;
+Reply with JSON only: {"title": "...", "why": "...", "fix": "...", "lesson": "...", "manual": "..."}`;
 
 const clip = (text: string | null | undefined, max: number) => {
   const value = (text ?? "").trim();
@@ -59,7 +63,13 @@ export function parseDiagnosis(text: string | undefined) {
   try {
     const parsed = JSON.parse(json) as Record<string, unknown>;
     const field = (name: string, max: number) => (typeof parsed[name] === "string" ? clip(parsed[name] as string, max) : "");
-    const result = { title: field("title", 120).replace(/\.$/, ""), why: field("why", 700), fix: field("fix", 900) };
+    const result = {
+      title: field("title", 120).replace(/\.$/, ""),
+      why: field("why", 700),
+      fix: field("fix", 900),
+      lesson: field("lesson", LESSON_MAX) || null,
+      manual: field("manual", 400) || null,
+    };
     return result.title && result.why && result.fix ? result : null;
   } catch {
     return null;
@@ -173,7 +183,7 @@ export function createExplainer(ctx: AppContext) {
         const row = saved.get(issue.id);
         const at = row?.createdAt.toISOString() ?? "";
         if (row?.status === "ready" && row.title && row.why && row.fix) {
-          out.set(issue.id, { status: "ready", title: row.title, why: row.why, fix: row.fix, model: row.model, at, inputTokens: row.inputTokens, outputTokens: row.outputTokens, latencyMs: row.latencyMs });
+          out.set(issue.id, { status: "ready", title: row.title, why: row.why, fix: row.fix, lesson: row.lesson, manual: row.manual, model: row.model, at, inputTokens: row.inputTokens, outputTokens: row.outputTokens, latencyMs: row.latencyMs });
         } else if (row?.status === "failed") {
           out.set(issue.id, { status: "failed", error: row.error ?? "Unknown error", model: row.model, at });
         }

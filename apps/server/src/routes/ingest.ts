@@ -19,6 +19,7 @@ import { type Ingest, describeError, projectForKey } from "../ingestService";
 import { keyFromHeaders } from "../keys";
 import { batchFor } from "../normalizers";
 import { decodeLogs, decodeTraces } from "../otlpProto";
+import { LESSON_HARNESSES, deliverLessons } from "../lessons";
 import { type SyncReport, reportSync } from "../syncs";
 
 const { runs, sessions, transcriptCursors } = schema;
@@ -108,6 +109,13 @@ export function ingestRoutes(ctx: AppContext, ingest: Ingest) {
     // Prefixed OTLP paths (e.g. /otlp/v1/traces) skip the /v1/* middleware.
     if (!c.get("projectId") && !(await authenticate(c))) return c.json({ error: UNAUTHORIZED }, 401);
     return otlp(c, match[1] as Signal);
+  });
+
+  // The lessons the owner approved for this agent, which its plugin adds to every turn.
+  app.get("/v1/lessons", async (c) => {
+    const harness = c.req.query("harness") ?? "";
+    if (!LESSON_HARNESSES.has(harness)) return c.json({ lessons: [] });
+    return c.json({ lessons: await deliverLessons(ctx.db, c.get("projectId"), harness) });
   });
 
   // Progress of an upload of past runs: { id, harness, total, done, finished? }.

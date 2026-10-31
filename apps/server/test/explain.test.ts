@@ -128,7 +128,12 @@ describe("Inbox diagnoses by Muse Spark", () => {
   });
 
   it("reads the model's JSON even with fences or chatter around it", () => {
-    expect(parseDiagnosis('Sure! {"title": "A", "why": "B", "fix": "C"} Hope that helps')).toEqual({ title: "A", why: "B", fix: "C" });
+    expect(parseDiagnosis('Sure! {"title": "A", "why": "B", "fix": "C"} Hope that helps')).toEqual({ title: "A", why: "B", fix: "C", lesson: null, manual: null });
+    // The lesson the agent would get, and the settings change only the owner should make.
+    expect(parseDiagnosis('{"title": "A", "why": "B", "fix": "C", "lesson": "In cron runs, never use execute_code.", "manual": ""}')).toMatchObject({
+      lesson: "In cron runs, never use execute_code.",
+      manual: null,
+    });
     expect(parseDiagnosis('{"title": "A", "why": "", "fix": "C"}')).toBeNull();
     expect(parseDiagnosis("no json here")).toBeNull();
   });

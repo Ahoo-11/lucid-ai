@@ -16,9 +16,19 @@ from pathlib import Path
 
 RECEIVED: list[dict] = []
 ANSWER = {"status": 200}
+LESSONS: dict = {"lessons": []}
+FETCHES: list[dict] = []
 
 
 class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):  # noqa: N802
+        FETCHES.append({"path": self.path, "key": self.headers.get("x-api-key")})
+        body = json.dumps(LESSONS).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_POST(self):  # noqa: N802
         body = self.rfile.read(int(self.headers["Content-Length"]))
         encoding = self.headers.get("Content-Encoding")
@@ -73,6 +83,8 @@ class PluginTest(unittest.TestCase):
 
     def setUp(self):
         RECEIVED.clear()
+        FETCHES.clear()
+        LESSONS["lessons"] = []
         ANSWER["status"] = 200
         os.environ.pop("LUCID_BACKFILL_DAYS", None)
         self.home = home = Path(tempfile.mkdtemp(prefix="lucid-hermes-"))
@@ -315,6 +327,44 @@ class PluginTest(unittest.TestCase):
         os.environ["LUCID_ENDPOINT"] = "http://127.0.0.1:9"
         self.plugin._backfill(30)
         self.assertFalse((self.home / "lucid-backfill.json").exists())
+
+    def test_adds_approved_lessons_to_every_turn(self):
+        hook = self.ctx.hooks["pre_llm_call"]
+        turn = {"session_id": "s1", "turn_id": "s1:task:1", "user_message": "check the repos"}
+        self.assertIsNone(hook(**turn))  # nothing approved yet: nothing added
+
+        LESSONS["lessons"] = [
+            {"id": "l1", "text": "When running as a cron job, never use execute_code."},
+            {"id": "l2", "text": "Call one local tool per tool call."},
+        ]
+        expected = {
+            "context": "Lessons from your owner, via Lucid (follow them):\n"
+            "- When running as a cron job, never use execute_code.\n"
+            "- Call one local tool per tool call."
+        }
+
+        def refreshed():
+            self.plugin._lessons.refresh()
+            return hook(**turn) == expected
+
+        self.assertTrue(self.wait_for(refreshed))
+        self.assertEqual(FETCHES[-1], {"path": "/v1/lessons?harness=hermes", "key": "lucid_live_test"})
+        # Only pre_llm_call's answer is used by Hermes; the others stay observers.
+        self.assertIsNone(self.ctx.hooks["post_llm_call"](session_id="s1", turn_id="s1:task:1", assistant_response="ok"))
+        # The turn is still observed as before.
+        self.assertTrue(any(event["hook"] == "pre_llm_call" for event in self.events()))
+
+        # Lucid unreachable: the lessons already approved stay in effect.
+        os.environ["LUCID_ENDPOINT"] = "http://127.0.0.1:9"
+        with self.assertRaises(OSError):
+            self.plugin._lessons.refresh()
+        self.assertEqual(hook(**turn), expected)
+
+        # Turned off in Lucid: gone from the next refresh.
+        os.environ["LUCID_ENDPOINT"] = f"http://127.0.0.1:{self.server.server_port}"
+        LESSONS["lessons"] = []
+        self.plugin._lessons.refresh()
+        self.assertIsNone(hook(**turn))
 
     def test_backfill_starts_from_register_when_asked(self):
         self.make_state_db(time.time())

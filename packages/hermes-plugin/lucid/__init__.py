@@ -17,6 +17,8 @@ Configuration, first match wins (put them in ~/.hermes/.env on a server):
 Optional:
   LUCID_BACKFILL_DAYS=30   also upload past sessions from state.db, once, newest
                            first, reporting progress to Lucid as it goes
+
+Lessons the owner approves in Lucid are added to every turn (see _Lessons).
 """
 
 from __future__ import annotations
@@ -82,6 +84,10 @@ SPOOL_RETRY_SECONDS = 30.0
 REJECTED_FOREVER = {400, 413, 422}
 BACKFILL_TIMEOUT = 60.0
 BACKFILL_MARKER = "lucid-backfill.json"
+LESSONS_REFRESH_SECONDS = 60.0
+LESSONS_TIMEOUT = 5.0
+# Lucid caps a lesson at 400 characters and sends at most 10; this is a backstop.
+LESSONS_MAX_CHARS = 4_000
 # Same lists as `lucid import hermes`; older Hermes versions lack some columns.
 SESSION_COLUMNS = [
     "id", "source", "model", "system_prompt_hash", "parent_session_id", "started_at", "ended_at", "end_reason", "title",
@@ -112,7 +118,7 @@ def _spool_dir() -> Path:
 def _post_json(path: str, body: dict[str, Any], timeout: float) -> bool:
     """POST to Lucid, gzipped when large. True on a 2xx answer."""
     endpoint, key = _config()
-    headers = {"Content-Type": "application/json", "User-Agent": "lucid-hermes-plugin/0.3"}
+    headers = {"Content-Type": "application/json", "User-Agent": "lucid-hermes-plugin/0.4"}
     if key:
         headers["x-api-key"] = key
     data = json.dumps(body, separators=(",", ":"), default=str).encode("utf-8")
@@ -479,29 +485,85 @@ def _reasoning(message: Any) -> Optional[str]:
     return None
 
 
+class _Lessons:
+    """Lessons the owner approved in Lucid ("When running as a cron job, never use
+    execute_code"), added to every turn through pre_llm_call's context, which
+    Hermes appends to the copy of the user message sent to the model; nothing
+    on disk changes. A background thread refreshes them; the hook only reads the
+    cached copy, so a turn never waits on the network. If Lucid can't be
+    reached, the last lessons stay in effect; turning one off in Lucid takes it
+    out within a minute."""
+
+    def __init__(self) -> None:
+        self.block = ""
+        self.lock = threading.Lock()
+        self.started = False
+
+    def context(self) -> Optional[dict[str, str]]:
+        with self.lock:
+            return {"context": self.block} if self.block else None
+
+    def refresh(self) -> None:
+        endpoint, key = _config()
+        headers = {"User-Agent": "lucid-hermes-plugin/0.4"}
+        if key:
+            headers["x-api-key"] = key
+        request = urllib.request.Request(f"{endpoint}/v1/lessons?harness=hermes", headers=headers)
+        with urllib.request.urlopen(request, timeout=LESSONS_TIMEOUT) as response:
+            lessons = json.loads(response.read().decode("utf-8")).get("lessons") or []
+        lines = [f"- {str(lesson.get('text', '')).strip()}" for lesson in lessons if str(lesson.get("text", "")).strip()]
+        block = ""
+        if lines:
+            block = "Lessons from your owner, via Lucid (follow them):\n" + "\n".join(lines)
+        with self.lock:
+            self.block = block[:LESSONS_MAX_CHARS]
+
+    def _loop(self) -> None:
+        while True:
+            try:
+                self.refresh()
+            except Exception:  # an older Lucid, or offline: keep what we have
+                log.debug("Lucid lessons refresh failed", exc_info=True)
+            time.sleep(LESSONS_REFRESH_SECONDS)
+
+    def start(self) -> None:
+        if not self.started:
+            self.started = True
+            threading.Thread(target=self._loop, name="lucid-lessons", daemon=True).start()
+
+
+_lessons = _Lessons()
+
+
 def _make_hook(hook: str):
-    def _hook(**kwargs: Any) -> None:
-        try:
-            reasoning = _reasoning(kwargs.get("assistant_message")) if hook == "post_api_request" else None
-            tools = _raw_tools(kwargs) if hook == "pre_api_request" else None
-            messages = _raw_messages(kwargs) if hook == "pre_api_request" else None
-            payload = _jsonable({k: v for k, v in kwargs.items() if k not in DROPPED_FIELDS})
-            payload["hook"] = hook
-            payload["ts"] = time.time()
-            if reasoning:
-                payload["reasoning"] = reasoning[:MAX_STRING]
-            if hook == "pre_api_request":
-                _correlator.tools_once(payload, tools)
-                # Replays need the exact messages; the sanitized copy may be cut.
-                body = payload.get("request", {}).get("body") if isinstance(payload.get("request"), dict) else None
-                if messages is not None and isinstance(body, dict):
-                    body["messages"] = messages
-            _correlator.annotate(hook, payload)
-            _sender.put(payload)
-        except Exception:  # observability must never break the agent
-            log.debug("Lucid hook %s failed", hook, exc_info=True)
+    def _hook(**kwargs: Any) -> Optional[dict[str, str]]:
+        _observe(hook, kwargs)
+        # The one hook whose return value Hermes uses: context for this turn.
+        return _lessons.context() if hook == "pre_llm_call" else None
 
     return _hook
+
+
+def _observe(hook: str, kwargs: dict[str, Any]) -> None:
+    try:
+        reasoning = _reasoning(kwargs.get("assistant_message")) if hook == "post_api_request" else None
+        tools = _raw_tools(kwargs) if hook == "pre_api_request" else None
+        messages = _raw_messages(kwargs) if hook == "pre_api_request" else None
+        payload = _jsonable({k: v for k, v in kwargs.items() if k not in DROPPED_FIELDS})
+        payload["hook"] = hook
+        payload["ts"] = time.time()
+        if reasoning:
+            payload["reasoning"] = reasoning[:MAX_STRING]
+        if hook == "pre_api_request":
+            _correlator.tools_once(payload, tools)
+            # Replays need the exact messages; the sanitized copy may be cut.
+            body = payload.get("request", {}).get("body") if isinstance(payload.get("request"), dict) else None
+            if messages is not None and isinstance(body, dict):
+                body["messages"] = messages
+        _correlator.annotate(hook, payload)
+        _sender.put(payload)
+    except Exception:  # observability must never break the agent
+        log.debug("Lucid hook %s failed", hook, exc_info=True)
 
 
 def _history_groups(db_path: Path, days: float) -> list[tuple[list[dict[str, Any]], list[dict[str, Any]]]]:
@@ -639,6 +701,7 @@ def register(ctx: Any) -> None:
     for hook in HOOKS:
         ctx.register_hook(hook, _make_hook(hook))
     atexit.register(_sender.flush)
+    _lessons.start()
     days = _backfill_days()
     if days:
         threading.Thread(target=_backfill, args=(days,), name="lucid-backfill", daemon=True).start()
