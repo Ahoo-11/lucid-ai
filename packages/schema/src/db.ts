@@ -120,7 +120,7 @@ export const historySyncs = pgTable(
 
 /**
  * An Inbox problem explained by a model (Muse Spark when Baseten is set up):
- * root cause and fix written from the failing steps, made once per problem.
+ * root cause and fix written from the failing steps, when someone asks for it.
  */
 export const issueExplanations = pgTable(
   "issue_explanations",
@@ -129,12 +129,16 @@ export const issueExplanations = pgTable(
     /** The Inbox's id for the problem: its kind, tool and error signature. */
     issueId: text("issue_id").notNull(),
     model: text("model").notNull(),
-    /** ready, or failed (tried again after a while). */
+    /** ready, or failed (asked again with the Diagnose button). */
     status: text("status").notNull(),
     title: text("title"),
     why: text("why"),
     fix: text("fix"),
     error: text("error"),
+    /** What the diagnosis cost, to tune the prompt before any rule runs them on its own. */
+    inputTokens: integer("input_tokens"),
+    outputTokens: integer("output_tokens"),
+    latencyMs: integer("latency_ms"),
     createdAt: createdAt(),
   },
   (t) => [primaryKey({ columns: [t.projectId, t.issueId] })],

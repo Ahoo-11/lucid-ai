@@ -65,9 +65,6 @@ export const requireProject = (ctx: AppContext): MiddlewareHandler<AppEnv> => as
   return next();
 };
 
-/** How many of the top recurring problems get a model-written diagnosis. */
-const DIAGNOSED_ISSUES = 10;
-
 export function apiRoutes(ctx: AppContext) {
   const app = new Hono<AppEnv>();
   const { db } = ctx;
@@ -164,8 +161,8 @@ export function apiRoutes(ctx: AppContext) {
     return c.json({ run, session: session ?? null, steps: stepRows, sessionRuns: siblings });
   });
 
-  app.get("/issues", async (c) => {
-    const projectId = c.get("projectId");
+  /** Failed steps grouped by what failed and how, most runs first, with the rule-based hint. */
+  async function loadIssues(projectId: string) {
     const failed = await db
       .select({
         runId: steps.runId,
@@ -191,13 +188,29 @@ export function apiRoutes(ctx: AppContext) {
       if (row.startedAt && (!group.firstSeen || row.startedAt < group.firstSeen)) group.firstSeen = row.startedAt;
       groups.set(key, group);
     }
-    const issues = [...groups.values()]
+    return [...groups.values()]
       .map(({ runIds, key, ...group }) => ({ id: Buffer.from(key).toString("base64url"), ...group, runs: runIds.size, ...hintFor(group.toolName, group.kind, group.sample) }))
       .sort((a, b) => b.runs - a.runs || b.occurrences - a.occurrences);
-    // The model diagnoses the problems the Inbox shows as cards: the top recurring ones.
-    const wanted = new Set(issues.filter((issue) => issue.runs >= 2).slice(0, DIAGNOSED_ISSUES).map((issue) => issue.id));
-    const diagnoses = await explainer.diagnoses(projectId, issues.slice(0, 200), wanted);
+  }
+
+  app.get("/issues", async (c) => {
+    const projectId = c.get("projectId");
+    const issues = await loadIssues(projectId);
+    // Only what was already asked for: opening the Inbox never spends model credits.
+    const diagnoses = await explainer.diagnoses(projectId, issues.slice(0, 200));
     return c.json({ issues: issues.map((issue) => ({ ...issue, diagnosis: diagnoses.get(issue.id) ?? null })), diagnosisModel: explainer.enabled ? ctx.ai?.model : null });
+  });
+
+  // A diagnosis runs only when someone asks for one (the Diagnose button), so
+  // its cost can be measured before any rule starts them on its own.
+  app.post("/issues/:id/diagnose", async (c) => {
+    // JSON only: a cross-site form can't send it, so no one can spend credits on your behalf.
+    if (!(c.req.header("content-type") ?? "").includes("application/json")) return c.json({ error: "Send JSON" }, 415);
+    if (!explainer.enabled) return c.json({ error: "Diagnoses need a model key: set BASETEN_API_KEY for the Lucid server." }, 409);
+    const projectId = c.get("projectId");
+    const issue = (await loadIssues(projectId)).find((candidate) => candidate.id === c.req.param("id"));
+    if (!issue) return c.json({ error: "That problem isn't in the Inbox anymore." }, 404);
+    return c.json({ diagnosis: explainer.request(projectId, issue) });
   });
 
   /**

@@ -97,9 +97,14 @@ export type Issue = {
   title: string;
   why: string;
   fix: string;
-  /** Written by a model (Muse Spark) from the failing steps; null when diagnoses are off or failed. */
-  diagnosis: { status: "pending" } | { status: "ready"; title: string; why: string; fix: string; model: string } | null;
+  /** Written by a model (Muse Spark) from the failing steps, when someone asks; null until then. */
+  diagnosis: Diagnosis | null;
 };
+
+export type Diagnosis =
+  | { status: "pending" }
+  | { status: "ready"; title: string; why: string; fix: string; model: string; at: string; inputTokens: number | null; outputTokens: number | null; latencyMs: number | null }
+  | { status: "failed"; error: string; model: string; at: string };
 
 export type ConnectStatus = {
   endpoint: string;
@@ -218,6 +223,8 @@ export const api = {
   runs: (params: URLSearchParams) => request<{ runs: RunListItem[]; nextBefore: string | null }>(`/runs?${params}`),
   run: (id: string) => request<RunDetail>(`/runs/${id}`),
   issues: () => request<{ issues: Issue[]; diagnosisModel?: string | null }>("/issues"),
+  /** Asks the model to diagnose one problem; spends credits, so only on a click. */
+  diagnose: (issueId: string) => request<{ diagnosis: Diagnosis }>(`/issues/${encodeURIComponent(issueId)}/diagnose`, { method: "POST", body: "{}" }),
   connect: () => request<ConnectStatus>("/connect/status"),
   keys: () => request<{ keys: ApiKey[] }>("/keys"),
   createKey: (name: string) => request<ApiKey & { key: string }>("/keys", { method: "POST", body: JSON.stringify({ name }) }),

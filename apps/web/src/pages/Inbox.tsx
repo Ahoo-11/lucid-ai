@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, ChevronDown, ChevronRight, Lightbulb, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router";
@@ -14,7 +14,7 @@ export function Inbox() {
   const query = useQuery({
     queryKey: ["issues"],
     queryFn: api.issues,
-    // While Muse Spark is still writing diagnoses, look again soon.
+    // While a diagnosis someone asked for is running, look again soon.
     refetchInterval: (q) => (q.state.data?.issues.some((issue) => issue.diagnosis?.status === "pending") ? 3_000 : false),
   });
   const [showOneOffs, setShowOneOffs] = useState(false);
@@ -29,7 +29,7 @@ export function Inbox() {
         {query.data?.diagnosisModel && (
           <p className="mt-2 inline-flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
             {isMuse(query.data.diagnosisModel) && <BrandMark brand={BRANDS.meta} className="size-3.5" />}
-            Each problem is diagnosed by {isMuse(query.data.diagnosisModel) ? "Meta's Muse Spark" : query.data.diagnosisModel}, from the steps that failed.
+            Press Diagnose on a problem and {isMuse(query.data.diagnosisModel) ? "Meta's Muse Spark" : query.data.diagnosisModel} reads the steps that failed and writes the cause and a fix.
           </p>
         )}
       </div>
@@ -44,7 +44,7 @@ export function Inbox() {
       ) : (
         <div className="space-y-3">
           {issues.map((issue) => (
-            <IssueCard key={issue.id} issue={issue} />
+            <IssueCard key={issue.id} issue={issue} model={query.data?.diagnosisModel ?? null} />
           ))}
         </div>
       )}
@@ -78,8 +78,85 @@ const isMuse = (model: string) => /muse-spark/i.test(model);
 /** "Muse Spark" for Meta's model, the model id otherwise. */
 const modelLabel = (model: string) => (isMuse(model) ? "Muse Spark" : model);
 
-function IssueCard({ issue }: { issue: Issue }) {
-  // Muse Spark's diagnosis when it's ready; Lucid's rule of thumb meanwhile.
+/** "1,240 in · 310 out tokens · 3.1 s": what one diagnosis cost, for tuning it. */
+function costLine(d: { inputTokens: number | null; outputTokens: number | null; latencyMs: number | null }) {
+  const parts = [
+    d.inputTokens != null && d.outputTokens != null && `${d.inputTokens.toLocaleString()} in · ${d.outputTokens.toLocaleString()} out tokens`,
+    d.latencyMs != null && `${(d.latencyMs / 1000).toFixed(1)} s`,
+  ];
+  return parts.filter(Boolean).join(" · ");
+}
+
+/** The Diagnose button and what came of it. Diagnoses spend credits, so they run only on a click. */
+function DiagnosisBar({ issue, model }: { issue: Issue; model: string }) {
+  const queryClient = useQueryClient();
+  const diagnose = useMutation({
+    mutationFn: () => api.diagnose(issue.id),
+    // Show it as running at once, so "Run again" doesn't flash the old one.
+    onSuccess: ({ diagnosis }) =>
+      queryClient.setQueryData<{ issues: Issue[] }>(["issues"], (old) => old && { ...old, issues: old.issues.map((i) => (i.id === issue.id ? { ...i, diagnosis } : i)) }),
+    onSettled: () => void queryClient.invalidateQueries({ queryKey: ["issues"] }),
+  });
+  const d = issue.diagnosis;
+  const name = modelLabel(model);
+  const logo = isMuse(model) && <BrandMark brand={BRANDS.meta} className="size-3.5" />;
+  const ask = (label: string) => (
+    <button
+      type="button"
+      onClick={() => diagnose.mutate()}
+      className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-zinc-200 transition hover:bg-zinc-50 dark:ring-white/15 dark:hover:bg-white/5"
+    >
+      {logo}
+      {label}
+    </button>
+  );
+
+  if (diagnose.isPending || d?.status === "pending") {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
+        <Loader2 className="size-3 animate-spin" />
+        {name} is reading the failed steps…
+      </span>
+    );
+  }
+  if (diagnose.isError) {
+    return (
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <span className="text-rose-600 dark:text-rose-400">{diagnose.error.message}</span>
+        {ask("Try again")}
+      </div>
+    );
+  }
+  if (d?.status === "ready") {
+    const cost = costLine(d);
+    return (
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs">
+        <span className="inline-flex items-center gap-1.5 rounded-full bg-sky-50 px-2 py-0.5 font-medium text-sky-800 ring-1 ring-sky-600/15 dark:bg-sky-400/10 dark:text-sky-200 dark:ring-sky-400/20">
+          {logo}
+          Diagnosed by {modelLabel(d.model)}
+        </span>
+        {cost && <span className="text-zinc-500 tabular-nums dark:text-zinc-400" title="What this diagnosis cost">{cost}</span>}
+        <button type="button" onClick={() => diagnose.mutate()} className="font-medium text-zinc-500 underline-offset-2 hover:text-zinc-900 hover:underline dark:text-zinc-400 dark:hover:text-white">
+          Run again
+        </button>
+      </div>
+    );
+  }
+  if (d?.status === "failed") {
+    return (
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <span className="text-rose-600 dark:text-rose-400" title={d.error}>
+          Couldn't diagnose: {d.error.length > 90 ? `${d.error.slice(0, 89)}…` : d.error}
+        </span>
+        {ask("Try again")}
+      </div>
+    );
+  }
+  return ask(`Diagnose with ${name}`);
+}
+
+function IssueCard({ issue, model }: { issue: Issue; model: string | null }) {
+  // The model's diagnosis once someone asked for it; Lucid's rule of thumb until then.
   const ai = issue.diagnosis?.status === "ready" ? issue.diagnosis : null;
   const shown = ai ?? issue;
   return (
@@ -93,17 +170,7 @@ function IssueCard({ issue }: { issue: Issue }) {
               <span className="font-medium text-zinc-900 dark:text-zinc-100">{plural(issue.runs, "run")}</span> · {plural(issue.occurrences, "time")} · last {ago(issue.lastSeen)}
             </div>
           </div>
-          {ai ? (
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-sky-50 px-2 py-0.5 text-[11px] font-medium text-sky-800 ring-1 ring-sky-600/15 dark:bg-sky-400/10 dark:text-sky-200 dark:ring-sky-400/20">
-              {isMuse(ai.model) && <BrandMark brand={BRANDS.meta} className="size-3.5" />}
-              Diagnosed by {modelLabel(ai.model)}
-            </span>
-          ) : issue.diagnosis?.status === "pending" ? (
-            <span className="inline-flex items-center gap-1.5 text-[11px] text-zinc-500 dark:text-zinc-400">
-              <Loader2 className="size-3 animate-spin" />
-              Diagnosing this from the failed steps…
-            </span>
-          ) : null}
+          {model && <DiagnosisBar issue={issue} model={model} />}
           <p className="text-sm text-zinc-600 dark:text-zinc-300">{shown.why}</p>
           <div className="flex gap-2 rounded-lg bg-amber-50 p-3 text-sm dark:bg-amber-500/10">
             <Lightbulb className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" />

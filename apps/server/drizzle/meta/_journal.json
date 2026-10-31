@@ -50,6 +50,13 @@
       "when": 1793431245012,
       "tag": "0006_issue_explanations",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1793432978909,
+      "tag": "0007_diagnosis_cost",
+      "breakpoints": true
     }
   ]
 }

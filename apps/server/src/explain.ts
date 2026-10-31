@@ -1,8 +1,12 @@
 // Inbox diagnoses written by a model (Meta's Muse Spark when Baseten is set
-// up). For each recurring problem it reads the evidence (the error, what the
-// step tried, what the agent decided just before, the task) and writes the root
-// cause and a fix the owner can apply. Made once per problem, in the
-// background; the rule-based text shows until it's ready, and if it fails.
+// up). For one problem it reads the evidence (the error, what the step tried,
+// what the agent decided just before, the task) and writes the root cause and
+// a fix the owner can apply.
+//
+// Only on request (the Inbox's Diagnose button), never by itself: each one's
+// tokens and time are saved, so the cost can be measured and the prompt tuned
+// before any rule starts them automatically. The rule-based text shows until a
+// diagnosis is ready, and when it fails.
 
 import { and, desc, eq, inArray, isNull, lte } from "drizzle-orm";
 import type { ChatClient } from "./ee/arena/llm";
@@ -12,10 +16,8 @@ import type { Hint } from "./insights";
 
 const { issueExplanations, runs, steps } = schema;
 
-/** At most this many diagnoses run at once, so a big Inbox can't flood the provider. */
+/** At most this many diagnoses run at once, however fast people click. */
 const CONCURRENCY = 2;
-/** A failed diagnosis is tried again after this long (rate limits, outages). */
-const RETRY_AFTER_MS = 30 * 60_000;
 
 export type IssueForDiagnosis = Hint & {
   id: string;
@@ -27,7 +29,13 @@ export type IssueForDiagnosis = Hint & {
   examples: { runId: string }[];
 };
 
-export type Diagnosis = { status: "pending" } | { status: "ready"; title: string; why: string; fix: string; model: string };
+/** What it cost; null where the provider didn't say. */
+type Cost = { inputTokens: number | null; outputTokens: number | null; latencyMs: number | null };
+
+export type Diagnosis =
+  | { status: "pending" }
+  | ({ status: "ready"; title: string; why: string; fix: string; model: string; at: string } & Cost)
+  | { status: "failed"; error: string; model: string; at: string };
 
 const SYSTEM = `You are Lucid's failure analyst. Lucid watches AI agents (Claude Code, Hermes Agent, LangGraph apps and others) and groups their failed steps by cause. For one group, explain the root cause and the fix to the agent's owner, who may not be technical.
 
@@ -110,12 +118,15 @@ export function createExplainer(ctx: AppContext) {
           { role: "user", content: await evidence(projectId, issue) },
         ],
       });
+      const cost = { inputTokens: result.inputTokens ?? null, outputTokens: result.outputTokens ?? null, latencyMs: result.latencyMs };
       const parsed = parseDiagnosis(result.text);
-      if (!parsed) throw new Error(`Unreadable reply: ${clip(result.text, 200) || "(empty)"}`);
-      row = { projectId, issueId: issue.id, model, status: "ready", ...parsed, error: null };
+      row = parsed
+        ? { projectId, issueId: issue.id, model, status: "ready", ...parsed, error: null, ...cost }
+        : // Paid for but unusable: the cost still counts.
+          { projectId, issueId: issue.id, model, status: "failed", error: `Unreadable reply: ${clip(result.text, 200) || "(empty)"}`, ...cost };
     } catch (error) {
       ctx.log.warn(`[inbox] diagnosis with ${model} failed: ${(error as Error).message.slice(0, 300)}`);
-      row = { projectId, issueId: issue.id, model, status: "failed", error: (error as Error).message.slice(0, 500) };
+      row = { projectId, issueId: issue.id, model, status: "failed", error: (error as Error).message.slice(0, 500), inputTokens: null, outputTokens: null, latencyMs: null };
     }
     const { projectId: _p, issueId: _i, ...changes } = row;
     await ctx.db
@@ -123,7 +134,7 @@ export function createExplainer(ctx: AppContext) {
       .values(row)
       .onConflictDoUpdate({ target: [issueExplanations.projectId, issueExplanations.issueId], set: { ...changes, createdAt: new Date() } });
     // Open dashboards refetch, so the Inbox updates by itself.
-    if (row.status === "ready") ctx.live.publish({ projectId, runIds: issue.examples.map((e) => e.runId) });
+    ctx.live.publish({ projectId, runIds: issue.examples.map((e) => e.runId) });
   }
 
   function pump() {
@@ -145,35 +156,41 @@ export function createExplainer(ctx: AppContext) {
     /** Whether diagnoses are on: a model key and a model to use (Baseten sets both). */
     enabled: !!ctx.chat && !!model,
 
-    /**
-     * Saved diagnoses for these problems, starting the missing ones for
-     * `wanted` in the background (they show as pending until done).
-     */
-    async diagnoses(projectId: string, issues: IssueForDiagnosis[], wanted: Set<string>) {
+    /** Diagnoses already asked for: saved ones, and ones still running. Never starts one. */
+    async diagnoses(projectId: string, issues: IssueForDiagnosis[]) {
       const out = new Map<string, Diagnosis>();
-      if (!ctx.chat || !model || !issues.length) return out;
+      if (!issues.length) return out;
       const rows = await ctx.db
         .select()
         .from(issueExplanations)
         .where(and(eq(issueExplanations.projectId, projectId), inArray(issueExplanations.issueId, issues.map((i) => i.id))));
       const saved = new Map(rows.map((row) => [row.issueId, row]));
       for (const issue of issues) {
-        const row = saved.get(issue.id);
-        if (row?.status === "ready" && row.title && row.why && row.fix) {
-          out.set(issue.id, { status: "ready", title: row.title, why: row.why, fix: row.fix, model: row.model });
+        if (queued.has(`${projectId}\u0000${issue.id}`)) {
+          out.set(issue.id, { status: "pending" });
           continue;
         }
-        const key = `${projectId}\u0000${issue.id}`;
-        const due = !row || Date.now() - row.createdAt.getTime() > RETRY_AFTER_MS;
-        if (queued.has(key)) out.set(issue.id, { status: "pending" });
-        else if (wanted.has(issue.id) && due) {
-          queued.add(key);
-          queue.push({ projectId, issue });
-          out.set(issue.id, { status: "pending" });
+        const row = saved.get(issue.id);
+        const at = row?.createdAt.toISOString() ?? "";
+        if (row?.status === "ready" && row.title && row.why && row.fix) {
+          out.set(issue.id, { status: "ready", title: row.title, why: row.why, fix: row.fix, model: row.model, at, inputTokens: row.inputTokens, outputTokens: row.outputTokens, latencyMs: row.latencyMs });
+        } else if (row?.status === "failed") {
+          out.set(issue.id, { status: "failed", error: row.error ?? "Unknown error", model: row.model, at });
         }
       }
-      pump();
       return out;
+    },
+
+    /** Diagnoses one problem in the background (or again, replacing the saved one). */
+    request(projectId: string, issue: IssueForDiagnosis): Diagnosis {
+      const key = `${projectId}\u0000${issue.id}`;
+      // A second click while it runs doesn't pay twice.
+      if (!queued.has(key)) {
+        queued.add(key);
+        queue.push({ projectId, issue });
+        pump();
+      }
+      return { status: "pending" };
     },
   };
 }
