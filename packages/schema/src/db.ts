@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
   bigserial,
+  boolean,
   doublePrecision,
   index,
   integer,
@@ -132,6 +133,8 @@ export const issueExplanations = pgTable(
     /** ready, or failed (asked again with the Diagnose button). */
     status: text("status").notNull(),
     title: text("title"),
+    /** One everyday sentence on what it means for the owner: the line the Inbox card shows. */
+    summary: text("summary"),
     why: text("why"),
     fix: text("fix"),
     /** The instruction it proposes for the agent; applied only once the owner approves (see lessons). */
@@ -139,7 +142,9 @@ export const issueExplanations = pgTable(
     /** A setting or permission only the owner should change; never applied by Lucid. */
     manual: text("manual"),
     error: text("error"),
-    /** What the diagnosis cost, to tune the prompt before any rule runs them on its own. */
+    /** Started by Lucid for a recurring problem rather than by a click; these count toward the daily cap. */
+    auto: boolean("auto").notNull().default(false),
+    /** What the diagnosis cost, to tune the prompt and the daily cap. */
     inputTokens: integer("input_tokens"),
     outputTokens: integer("output_tokens"),
     latencyMs: integer("latency_ms"),

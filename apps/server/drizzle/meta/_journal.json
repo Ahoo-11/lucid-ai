@@ -71,6 +71,13 @@
       "when": 1793513107941,
       "tag": "0009_agent_plugins",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1793549563070,
+      "tag": "0010_diagnosis_summary",
+      "breakpoints": true
     }
   ]
 }

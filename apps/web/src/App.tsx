@@ -10,7 +10,7 @@ import { Landing } from "./landing/Landing";
 import { PasswordSignIn, Splash, Unreachable } from "./pages/SignIn";
 import { Arena, ExperimentPage, NewExperiment } from "./pages/Arena";
 import { Connect } from "./pages/Connect";
-import { Inbox, isRecurring } from "./pages/Inbox";
+import { Inbox, needsFix } from "./pages/Inbox";
 import { LinkPage } from "./pages/Link";
 import { RunPage } from "./pages/Run";
 import { Runs } from "./pages/Runs";
@@ -117,7 +117,7 @@ function Shell({ account }: { account: ReactNode }) {
             <span className="hidden sm:inline">Lucid</span>
           </NavLink>
           <nav className="flex items-center gap-1 overflow-x-auto">
-            <Tab to="/inbox" badge={issues.data?.issues.filter(isRecurring).length}>
+            <Tab to="/inbox" badge={issues.data?.issues.filter(needsFix).length}>
               Inbox
             </Tab>
             <Tab to="/runs" busy={syncing ? "Bringing in past runs" : undefined}>

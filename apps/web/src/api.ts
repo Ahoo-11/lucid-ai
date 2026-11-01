@@ -97,7 +97,7 @@ export type Issue = {
   title: string;
   why: string;
   fix: string;
-  /** Written by a model (Muse Spark) from the failing steps, when someone asks; null until then. */
+  /** Written by a model (Muse Spark) from the failing steps: by itself for recurring problems, or on a click; null until then. */
   diagnosis: Diagnosis | null;
   /** The agent it happened in (most recently): the one a lesson goes to. */
   harness: string;
@@ -112,6 +112,8 @@ export type Diagnosis =
   | {
       status: "ready";
       title: string;
+      /** One everyday sentence on what it means for the owner; null on diagnoses older than it. */
+      summary: string | null;
       why: string;
       fix: string;
       /** The instruction proposed for the agent; applied only on approval. */
@@ -120,11 +122,13 @@ export type Diagnosis =
       manual: string | null;
       model: string;
       at: string;
+      /** Started by Lucid for a recurring problem, not by a click. */
+      auto: boolean;
       inputTokens: number | null;
       outputTokens: number | null;
       latencyMs: number | null;
     }
-  | { status: "failed"; error: string; model: string; at: string };
+  | { status: "failed"; error: string; model: string; at: string; auto: boolean };
 
 export type AppliedLesson = {
   id: string;

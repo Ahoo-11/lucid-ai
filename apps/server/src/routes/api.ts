@@ -216,7 +216,7 @@ export function apiRoutes(ctx: AppContext) {
   app.get("/issues", async (c) => {
     const projectId = c.get("projectId");
     const issues = await loadIssues(projectId);
-    // Only what was already asked for: opening the Inbox never spends model credits.
+    // Opening the Inbox starts diagnoses for recurring problems never diagnosed, up to the daily cap.
     const diagnoses = await explainer.diagnoses(projectId, issues.slice(0, 200));
     const applied = await lessonsForIssues(db, projectId, issues.slice(0, 200).map((issue) => issue.id));
     const shown = await Promise.all(
@@ -254,8 +254,7 @@ export function apiRoutes(ctx: AppContext) {
     return lesson ? c.json({ lesson }) : c.json({ error: "No such lesson" }, 404);
   });
 
-  // A diagnosis runs only when someone asks for one (the Diagnose button), so
-  // its cost can be measured before any rule starts them on its own.
+  // The Diagnose button: one-off problems, ones past the daily cap, and running one again.
   app.post("/issues/:id/diagnose", async (c) => {
     // JSON only: a cross-site form can't send it, so no one can spend credits on your behalf.
     if (!(c.req.header("content-type") ?? "").includes("application/json")) return c.json({ error: "Send JSON" }, 415);

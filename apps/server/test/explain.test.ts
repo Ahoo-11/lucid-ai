@@ -2,14 +2,14 @@ import { describe, expect, it } from "vitest";
 import { MUSE_SPARK } from "../src/ai";
 import { createApp } from "../src/app";
 import type { AppContext } from "../src/context";
-import { openDb } from "../src/db";
+import { openDb, schema } from "../src/db";
 import type { ChatClient, ChatRequest } from "../src/ee/arena/llm";
-import { parseDiagnosis } from "../src/explain";
+import { AUTO_PER_DAY, parseDiagnosis } from "../src/explain";
 import { ensureDefaultProject } from "../src/keys";
 import { LiveHub } from "../src/live";
 
-type Diagnosis = { status: string; title?: string; fix?: string; model?: string; error?: string; inputTokens?: number; outputTokens?: number; latencyMs?: number };
-type Issue = { id: string; title: string; runs: number; diagnosis: Diagnosis | null };
+type Diagnosis = { status: string; title?: string; summary?: string | null; fix?: string; model?: string; error?: string; auto?: boolean; inputTokens?: number; outputTokens?: number; latencyMs?: number };
+type Issue = { id: string; title: string; runs: number; toolName: string | null; diagnosis: Diagnosis | null };
 
 async function setup(chat: ChatClient | undefined) {
   const { db } = await openDb();
@@ -25,14 +25,19 @@ async function setup(chat: ChatClient | undefined) {
   };
   const app = createApp(ctx);
   const post = (path: string, body: unknown) => app.request(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-  // The same tool failing the same way in two runs: a recurring problem.
-  for (const prompt of ["p1", "p2"]) {
-    await post("/v1/hooks/claude-code", { hook_event_name: "UserPromptSubmit", session_id: "s1", prompt_id: prompt, prompt: `Count the lines (${prompt})` });
-    await post("/v1/hooks/claude-code", { hook_event_name: "PostToolUseFailure", session_id: "s1", prompt_id: prompt, tool_name: "Bash", tool_use_id: `t-${prompt}`, error: "wc: command not found" });
-  }
+  /** The same tool failing the same way in each of these runs. */
+  const fail = async (tool: string, error: string, prompts: string[]) => {
+    for (const prompt of prompts) {
+      await post("/v1/hooks/claude-code", { hook_event_name: "UserPromptSubmit", session_id: "s1", prompt_id: prompt, prompt: `Count the lines (${prompt})` });
+      await post("/v1/hooks/claude-code", { hook_event_name: "PostToolUseFailure", session_id: "s1", prompt_id: prompt, tool_name: tool, tool_use_id: `t-${tool}-${prompt}`, error });
+    }
+  };
+  // A recurring problem (two runs), and a one-off.
+  await fail("Bash", "wc: command not found", ["p1", "p2"]);
+  await fail("Read", "EACCES: permission denied", ["p3"]);
   const issues = async () => (await (await app.request("/api/issues")).json()) as { issues: Issue[]; diagnosisModel: string | null };
   const diagnose = (id: string) => post(`/api/issues/${id}/diagnose`, {});
-  return { app, issues, diagnose };
+  return { app, db, projectId, fail, issues, diagnose };
 }
 
 async function until<T>(read: () => Promise<T>, ok: (value: T) => boolean) {
@@ -44,39 +49,34 @@ async function until<T>(read: () => Promise<T>, ok: (value: T) => boolean) {
   return read();
 }
 
+const REPLY = '```json\n{"title": "Unix command used on Windows.", "summary": "Your agent kept retrying a step that can never work here.", "why": "The agent ran wc, which Windows lacks.", "fix": "Add \\"Use PowerShell commands\\" to CLAUDE.md."}\n```';
+
 describe("Inbox diagnoses by Muse Spark", () => {
-  it("runs only when asked, from the problem's evidence, and keeps what it cost", async () => {
+  it("diagnoses a recurring problem by itself, once, from its evidence, and keeps what it cost", async () => {
     const asked: ChatRequest[] = [];
     const chat: ChatClient = async (request) => {
       asked.push(request);
       await new Promise((resolve) => setTimeout(resolve, 30));
-      return {
-        text: '```json\n{"title": "Unix command used on Windows.", "why": "The agent ran wc, which Windows lacks.", "fix": "Add \\"Use PowerShell commands\\" to CLAUDE.md."}\n```',
-        inputTokens: 640,
-        outputTokens: 120,
-        latencyMs: 2300,
-      };
+      return { text: REPLY, inputTokens: 640, outputTokens: 120, latencyMs: 2300 };
     };
     const { issues, diagnose } = await setup(chat);
 
-    // Opening the Inbox, again and again, never calls the model.
+    // Opening the Inbox starts it; opening it again while it runs doesn't pay twice.
     const first = await issues();
     await issues();
     expect(first.diagnosisModel).toBe(MUSE_SPARK);
-    const issue = first.issues.find((i) => i.runs === 2)!;
-    expect(issue.diagnosis).toBeNull();
-    expect(asked).toHaveLength(0);
-
-    // Asking twice while it runs pays once.
-    expect(await (await diagnose(issue.id)).json()).toEqual({ diagnosis: { status: "pending" } });
-    await diagnose(issue.id);
-    const later = await until(issues, (r) => r.issues.find((i) => i.id === issue.id)?.diagnosis?.status === "ready");
-    expect(later.issues.find((i) => i.id === issue.id)!.diagnosis).toMatchObject({
+    const recurring = first.issues.find((i) => i.runs === 2)!;
+    const oneOff = first.issues.find((i) => i.runs === 1)!;
+    expect(recurring.diagnosis).toEqual({ status: "pending" });
+    const later = await until(issues, (r) => r.issues.find((i) => i.id === recurring.id)?.diagnosis?.status === "ready");
+    expect(later.issues.find((i) => i.id === recurring.id)!.diagnosis).toMatchObject({
       status: "ready",
       title: "Unix command used on Windows",
+      summary: "Your agent kept retrying a step that can never work here.",
       why: "The agent ran wc, which Windows lacks.",
       fix: 'Add "Use PowerShell commands" to CLAUDE.md.',
       model: MUSE_SPARK,
+      auto: true,
       inputTokens: 640,
       outputTokens: 120,
       latencyMs: 2300,
@@ -88,31 +88,69 @@ describe("Inbox diagnoses by Muse Spark", () => {
     expect(evidence).toContain('tool "Bash"');
     expect(evidence).toContain("Failed 2 times across 2 runs");
 
-    // Run again replaces it; the Inbox still never starts one by itself.
+    // A one-off waits for the button.
+    expect(later.issues.find((i) => i.id === oneOff.id)!.diagnosis).toBeNull();
+
+    // Once diagnosed, opening the Inbox never runs it again; Run again does, as a click.
     await issues();
     expect(asked).toHaveLength(1);
-    await diagnose(issue.id);
-    await until(async () => asked.length, (n) => n === 2);
+    expect(await (await diagnose(recurring.id)).json()).toEqual({ diagnosis: { status: "pending" } });
+    await diagnose(recurring.id);
+    const again = await until(issues, (r) => asked.length === 2 && r.issues.find((i) => i.id === recurring.id)?.diagnosis?.status === "ready");
+    expect(again.issues.find((i) => i.id === recurring.id)!.diagnosis).toMatchObject({ auto: false });
     expect(asked).toHaveLength(2);
   });
 
-  it("says when the model failed, and lets it be asked again", async () => {
+  it("says when the model failed, doesn't retry by itself, and lets it be asked again", async () => {
     let fail = true;
+    let calls = 0;
     const { issues, diagnose } = await setup(async () => {
+      calls++;
       if (fail) throw new Error("429: rate limited");
       return { text: '{"title": "A", "why": "B", "fix": "C"}', latencyMs: 5 };
     });
     const issue = (await issues()).issues.find((i) => i.runs === 2)!;
-    await diagnose(issue.id);
     const failed = await until(issues, (r) => r.issues.find((i) => i.id === issue.id)?.diagnosis?.status === "failed");
     const shown = failed.issues.find((i) => i.id === issue.id)!;
-    expect(shown.diagnosis).toMatchObject({ status: "failed", error: "429: rate limited" });
+    expect(shown.diagnosis).toMatchObject({ status: "failed", error: "429: rate limited", auto: true });
     expect(shown.title).toBeTruthy(); // the rule-based text still shows
+    await issues();
+    expect(calls).toBe(1);
 
     fail = false;
     await diagnose(issue.id);
     const fixed = await until(issues, (r) => r.issues.find((i) => i.id === issue.id)?.diagnosis?.status === "ready");
-    expect(fixed.issues.find((i) => i.id === issue.id)!.diagnosis).toMatchObject({ status: "ready", title: "A" });
+    expect(fixed.issues.find((i) => i.id === issue.id)!.diagnosis).toMatchObject({ status: "ready", title: "A", summary: null });
+  });
+
+  it("stops at the daily cap, counting only the last 24 hours", async () => {
+    const asked: ChatRequest[] = [];
+    const { db, projectId, fail, issues, diagnose } = await setup(async (request) => {
+      asked.push(request);
+      return { text: '{"title": "A", "why": "B", "fix": "C"}', latencyMs: 5 };
+    });
+    await fail("Grep", "regex parse error", ["p4", "p5"]);
+    // One automatic diagnosis left today; older ones no longer count, and clicks never do.
+    const old = new Date(Date.now() - 25 * 3600_000);
+    await db.insert(schema.issueExplanations).values([
+      ...Array.from({ length: AUTO_PER_DAY - 1 }, (_, i) => ({ projectId, issueId: `today-${i}`, model: MUSE_SPARK, status: "ready", auto: true })),
+      ...Array.from({ length: AUTO_PER_DAY }, (_, i) => ({ projectId, issueId: `old-${i}`, model: MUSE_SPARK, status: "ready", auto: true, createdAt: old })),
+      { projectId, issueId: "clicked", model: MUSE_SPARK, status: "ready", auto: false },
+    ]);
+
+    const first = await issues();
+    const recurring = first.issues.filter((i) => i.runs === 2);
+    expect(recurring).toHaveLength(2);
+    expect(recurring.map((i) => i.diagnosis?.status ?? "none").sort()).toEqual(["none", "pending"]);
+    const done = await until(issues, (r) => r.issues.some((i) => i.diagnosis?.status === "ready"));
+    expect(asked).toHaveLength(1);
+    // The cap is spent: the other one waits for a click, which still works.
+    const waiting = done.issues.find((i) => i.runs === 2 && !i.diagnosis)!;
+    await issues();
+    expect(asked).toHaveLength(1);
+    await diagnose(waiting.id);
+    await until(async () => asked.length, (n) => n === 2);
+    expect(asked).toHaveLength(2);
   });
 
   it("refuses without a model key, for unknown problems, and for form posts", async () => {
@@ -128,7 +166,7 @@ describe("Inbox diagnoses by Muse Spark", () => {
   });
 
   it("reads the model's JSON even with fences or chatter around it", () => {
-    expect(parseDiagnosis('Sure! {"title": "A", "why": "B", "fix": "C"} Hope that helps')).toEqual({ title: "A", why: "B", fix: "C", lesson: null, manual: null });
+    expect(parseDiagnosis('Sure! {"title": "A", "why": "B", "fix": "C"} Hope that helps')).toEqual({ title: "A", summary: null, why: "B", fix: "C", lesson: null, manual: null });
     // The lesson the agent would get, and the settings change only the owner should make.
     expect(parseDiagnosis('{"title": "A", "why": "B", "fix": "C", "lesson": "In cron runs, never use execute_code.", "manual": ""}')).toMatchObject({
       lesson: "In cron runs, never use execute_code.",

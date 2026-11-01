@@ -3,12 +3,13 @@
 // what the agent decided just before, the task) and writes the root cause and
 // a fix the owner can apply.
 //
-// Only on request (the Inbox's Diagnose button), never by itself: each one's
-// tokens and time are saved, so the cost can be measured and the prompt tuned
-// before any rule starts them automatically. The rule-based text shows until a
+// Recurring problems (two or more runs) are diagnosed by themselves when the
+// Inbox is opened, once each and at most AUTO_PER_DAY a day; anything else,
+// and running one again, waits for the Diagnose button. Each one's tokens and
+// time are saved, to keep the cost measured. The rule-based text shows until a
 // diagnosis is ready, and when it fails.
 
-import { and, desc, eq, inArray, isNull, lte } from "drizzle-orm";
+import { and, count, desc, eq, gt, inArray, isNull, lte } from "drizzle-orm";
 import type { ChatClient } from "./ee/arena/llm";
 import type { AppContext } from "./context";
 import { schema } from "./db";
@@ -18,6 +19,10 @@ const { issueExplanations, runs, steps } = schema;
 
 /** At most this many diagnoses run at once, however fast people click. */
 const CONCURRENCY = 2;
+/** Automatic diagnoses an account gets in any 24 hours; the rest wait for a click. */
+export const AUTO_PER_DAY = 20;
+/** A problem seen in this many runs is diagnosed without being asked. */
+export const AUTO_MIN_RUNS = 2;
 /** A lesson rides along on every turn of the agent, so it stays short. */
 export const LESSON_MAX = 400;
 
@@ -36,20 +41,21 @@ type Cost = { inputTokens: number | null; outputTokens: number | null; latencyMs
 
 export type Diagnosis =
   | { status: "pending" }
-  | ({ status: "ready"; title: string; why: string; fix: string; lesson: string | null; manual: string | null; model: string; at: string } & Cost)
-  | { status: "failed"; error: string; model: string; at: string };
+  | ({ status: "ready"; title: string; summary: string | null; why: string; fix: string; lesson: string | null; manual: string | null; model: string; at: string; auto: boolean } & Cost)
+  | { status: "failed"; error: string; model: string; at: string; auto: boolean };
 
 const SYSTEM = `You are Lucid's failure analyst. Lucid watches AI agents (Claude Code, Hermes Agent, LangGraph apps and others) and groups their failed steps by cause. For one group, explain the root cause and the fix to the agent's owner, who may not be technical.
 
 Rules:
 - Base everything on the evidence given. Where it isn't certain, say what is most likely.
-- title: what went wrong, at most 10 words, no trailing period.
+- title: what went wrong in plain words, at most 8 words, no trailing period, no tool names or error codes.
+- summary: one everyday sentence, at most 20 words, on what this means for the owner: what didn't get done, or what it wasted. Someone who has never seen code must understand it.
 - why: one or two plain sentences on the root cause and what it costs (retries, wasted model calls, a stopped run).
 - fix: one to three sentences on what will stop it, for the owner to read.
 - lesson: the instruction to give the agent so it stops making this mistake, written to the agent ("When ..., do ... instead of ..."). One or two sentences, specific to this failure. Lucid adds it to the agent's instructions once the owner approves it. It must only make the agent more careful: never grant permissions, never turn off a safety check or an approval, never tell the agent to send data anywhere. Use "" if no instruction to the agent would help.
 - manual: a setting, permission or install that only the owner should change, in one sentence, or "" if none. Loosening a safety setting goes here, never in lesson.
 
-Reply with JSON only: {"title": "...", "why": "...", "fix": "...", "lesson": "...", "manual": "..."}`;
+Reply with JSON only: {"title": "...", "summary": "...", "why": "...", "fix": "...", "lesson": "...", "manual": "..."}`;
 
 const clip = (text: string | null | undefined, max: number) => {
   const value = (text ?? "").trim();
@@ -65,6 +71,7 @@ export function parseDiagnosis(text: string | undefined) {
     const field = (name: string, max: number) => (typeof parsed[name] === "string" ? clip(parsed[name] as string, max) : "");
     const result = {
       title: field("title", 120).replace(/\.$/, ""),
+      summary: field("summary", 240) || null,
       why: field("why", 700),
       fix: field("fix", 900),
       lesson: field("lesson", LESSON_MAX) || null,
@@ -78,8 +85,11 @@ export function parseDiagnosis(text: string | undefined) {
 
 export function createExplainer(ctx: AppContext) {
   const model = ctx.ai?.model ?? null;
-  const queue: { projectId: string; issue: IssueForDiagnosis }[] = [];
-  const queued = new Set<string>();
+  const enabled = !!ctx.chat && !!model;
+  const queue: { projectId: string; issue: IssueForDiagnosis; auto: boolean }[] = [];
+  /** Waiting or running, by project and problem; true for the automatic ones. */
+  const queued = new Map<string, boolean>();
+  const keyOf = (projectId: string, issueId: string) => `${projectId}\u0000${issueId}`;
   let active = 0;
 
   async function evidence(projectId: string, issue: IssueForDiagnosis) {
@@ -113,8 +123,8 @@ export function createExplainer(ctx: AppContext) {
       .join("\n\n");
   }
 
-  async function diagnose(projectId: string, issue: IssueForDiagnosis, chat: ChatClient, model: string) {
-    let row: typeof issueExplanations.$inferInsert;
+  async function diagnose(projectId: string, issue: IssueForDiagnosis, auto: boolean, chat: ChatClient, model: string) {
+    let row: typeof issueExplanations.$inferInsert & { auto: boolean };
     try {
       const result = await chat({
         model,
@@ -131,12 +141,12 @@ export function createExplainer(ctx: AppContext) {
       const cost = { inputTokens: result.inputTokens ?? null, outputTokens: result.outputTokens ?? null, latencyMs: result.latencyMs };
       const parsed = parseDiagnosis(result.text);
       row = parsed
-        ? { projectId, issueId: issue.id, model, status: "ready", ...parsed, error: null, ...cost }
+        ? { projectId, issueId: issue.id, model, auto, status: "ready", ...parsed, error: null, ...cost }
         : // Paid for but unusable: the cost still counts.
-          { projectId, issueId: issue.id, model, status: "failed", error: `Unreadable reply: ${clip(result.text, 200) || "(empty)"}`, ...cost };
+          { projectId, issueId: issue.id, model, auto, status: "failed", error: `Unreadable reply: ${clip(result.text, 200) || "(empty)"}`, ...cost };
     } catch (error) {
       ctx.log.warn(`[inbox] diagnosis with ${model} failed: ${(error as Error).message.slice(0, 300)}`);
-      row = { projectId, issueId: issue.id, model, status: "failed", error: (error as Error).message.slice(0, 500), inputTokens: null, outputTokens: null, latencyMs: null };
+      row = { projectId, issueId: issue.id, model, auto, status: "failed", error: (error as Error).message.slice(0, 500), inputTokens: null, outputTokens: null, latencyMs: null };
     }
     const { projectId: _p, issueId: _i, ...changes } = row;
     await ctx.db
@@ -150,23 +160,47 @@ export function createExplainer(ctx: AppContext) {
   function pump() {
     const chat = ctx.chat;
     while (chat && model && active < CONCURRENCY && queue.length) {
-      const { projectId, issue } = queue.shift()!;
+      const { projectId, issue, auto } = queue.shift()!;
       active++;
-      void diagnose(projectId, issue, chat, model)
+      void diagnose(projectId, issue, auto, chat, model)
         .catch((error) => ctx.log.error("[inbox] diagnosis", error))
         .finally(() => {
           active--;
-          queued.delete(`${projectId}\u0000${issue.id}`);
+          queued.delete(keyOf(projectId, issue.id));
           pump();
         });
     }
   }
 
+  function enqueue(projectId: string, issue: IssueForDiagnosis, auto: boolean) {
+    const key = keyOf(projectId, issue.id);
+    // A second click while it runs doesn't pay twice.
+    if (queued.has(key)) return;
+    queued.set(key, auto);
+    queue.push({ projectId, issue, auto });
+    pump();
+  }
+
+  /** Automatic diagnoses this account can still have today: the cap less the ones saved or running. */
+  async function autoLeft(projectId: string) {
+    const [saved] = await ctx.db
+      .select({ n: count() })
+      .from(issueExplanations)
+      .where(and(eq(issueExplanations.projectId, projectId), eq(issueExplanations.auto, true), gt(issueExplanations.createdAt, new Date(Date.now() - 24 * 3600_000))));
+    let running = 0;
+    for (const [key, auto] of queued) if (auto && key.startsWith(`${projectId}\u0000`)) running++;
+    return AUTO_PER_DAY - (saved?.n ?? 0) - running;
+  }
+
   return {
     /** Whether diagnoses are on: a model key and a model to use (Baseten sets both). */
-    enabled: !!ctx.chat && !!model,
+    enabled,
 
-    /** Diagnoses already asked for: saved ones, and ones still running. Never starts one. */
+    /**
+     * The diagnoses for these problems: saved ones, and ones still running.
+     * Starts one for each recurring problem that never had one, while the
+     * account's daily cap lasts; a failed one isn't retried by itself.
+     */
     async diagnoses(projectId: string, issues: IssueForDiagnosis[]) {
       const out = new Map<string, Diagnosis>();
       if (!issues.length) return out;
@@ -175,31 +209,35 @@ export function createExplainer(ctx: AppContext) {
         .from(issueExplanations)
         .where(and(eq(issueExplanations.projectId, projectId), inArray(issueExplanations.issueId, issues.map((i) => i.id))));
       const saved = new Map(rows.map((row) => [row.issueId, row]));
+      const never: IssueForDiagnosis[] = [];
       for (const issue of issues) {
-        if (queued.has(`${projectId}\u0000${issue.id}`)) {
+        if (queued.has(keyOf(projectId, issue.id))) {
           out.set(issue.id, { status: "pending" });
           continue;
         }
         const row = saved.get(issue.id);
         const at = row?.createdAt.toISOString() ?? "";
         if (row?.status === "ready" && row.title && row.why && row.fix) {
-          out.set(issue.id, { status: "ready", title: row.title, why: row.why, fix: row.fix, lesson: row.lesson, manual: row.manual, model: row.model, at, inputTokens: row.inputTokens, outputTokens: row.outputTokens, latencyMs: row.latencyMs });
+          out.set(issue.id, { status: "ready", title: row.title, summary: row.summary, why: row.why, fix: row.fix, lesson: row.lesson, manual: row.manual, model: row.model, at, auto: row.auto, inputTokens: row.inputTokens, outputTokens: row.outputTokens, latencyMs: row.latencyMs });
         } else if (row?.status === "failed") {
-          out.set(issue.id, { status: "failed", error: row.error ?? "Unknown error", model: row.model, at });
+          out.set(issue.id, { status: "failed", error: row.error ?? "Unknown error", model: row.model, at, auto: row.auto });
+        } else if (!row && issue.runs >= AUTO_MIN_RUNS) {
+          never.push(issue);
+        }
+      }
+      if (enabled && never.length) {
+        // Most runs first, as they come.
+        for (const issue of never.slice(0, Math.max(0, await autoLeft(projectId)))) {
+          enqueue(projectId, issue, true);
+          out.set(issue.id, { status: "pending" });
         }
       }
       return out;
     },
 
-    /** Diagnoses one problem in the background (or again, replacing the saved one). */
+    /** Diagnoses one problem in the background on request (or again, replacing the saved one). */
     request(projectId: string, issue: IssueForDiagnosis): Diagnosis {
-      const key = `${projectId}\u0000${issue.id}`;
-      // A second click while it runs doesn't pay twice.
-      if (!queued.has(key)) {
-        queued.add(key);
-        queue.push({ projectId, issue });
-        pump();
-      }
+      enqueue(projectId, issue, false);
       return { status: "pending" };
     },
   };
