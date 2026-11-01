@@ -19,7 +19,7 @@ import { listPlugins, requestUpdate } from "../plugins";
 import { currentSyncs } from "../syncs";
 import { writeBatch } from "../writer";
 
-const { apiKeys, blobs, rawEvents, runs, sessions, steps } = schema;
+const { apiKeys, blobs, ignoredIssues, projects, rawEvents, runs, sessions, steps } = schema;
 const STATUSES = new Set(["ok", "error", "running"]);
 
 const runListColumns = {
@@ -216,8 +216,11 @@ export function apiRoutes(ctx: AppContext) {
   app.get("/issues", async (c) => {
     const projectId = c.get("projectId");
     const issues = await loadIssues(projectId);
+    const [project] = await db.select({ autoDiagnose: projects.autoDiagnose }).from(projects).where(eq(projects.id, projectId)).limit(1);
+    const autoDiagnose = project?.autoDiagnose ?? true;
+    const ignored = new Set((await db.select({ issueId: ignoredIssues.issueId }).from(ignoredIssues).where(eq(ignoredIssues.projectId, projectId))).map((row) => row.issueId));
     // Opening the Inbox starts diagnoses for recurring problems never diagnosed, up to the daily cap.
-    const diagnoses = await explainer.diagnoses(projectId, issues.slice(0, 200));
+    const diagnoses = await explainer.diagnoses(projectId, issues.slice(0, 200), { auto: autoDiagnose, ignored });
     const applied = await lessonsForIssues(db, projectId, issues.slice(0, 200).map((issue) => issue.id));
     const shown = await Promise.all(
       issues.map(async ({ failedAt, ...issue }) => {
@@ -230,10 +233,33 @@ export function apiRoutes(ctx: AppContext) {
           lesson: lesson ? { ...lesson, failuresSince: since ? failedAt.filter((t) => t > since.getTime()).length : null, runsSince: since ? await runsSince(db, projectId, lesson.harness, since) : null } : null,
           // Whether Lucid can apply a lesson in this agent by itself (or it's one to copy).
           lessonsApply: LESSON_HARNESSES.has(issue.harness),
+          ignored: ignored.has(issue.id),
         };
       }),
     );
-    return c.json({ issues: shown, diagnosisModel: explainer.enabled ? ctx.ai?.model : null });
+    return c.json({ issues: shown, diagnosisModel: explainer.enabled ? ctx.ai?.model : null, autoDiagnose });
+  });
+
+  // Ignore: out of the Inbox and its badge, and never diagnosed by itself. Restore brings it back.
+  app.post("/issues/:id/:action{ignore|restore}", async (c) => {
+    if (!(c.req.header("content-type") ?? "").includes("application/json")) return c.json({ error: "Send JSON" }, 415);
+    const projectId = c.get("projectId");
+    const issueId = c.req.param("id");
+    if (c.req.param("action") === "restore") {
+      await db.delete(ignoredIssues).where(and(eq(ignoredIssues.projectId, projectId), eq(ignoredIssues.issueId, issueId)));
+      return c.json({ ignored: false });
+    }
+    if (!(await loadIssues(projectId)).some((issue) => issue.id === issueId)) return c.json({ error: "That problem isn't in the Inbox anymore." }, 404);
+    await db.insert(ignoredIssues).values({ projectId, issueId }).onConflictDoNothing();
+    return c.json({ ignored: true });
+  });
+
+  // The Inbox's switch for diagnosing recurring problems without a click.
+  app.post("/settings/auto-diagnose/:status{on|off}", async (c) => {
+    if (!(c.req.header("content-type") ?? "").includes("application/json")) return c.json({ error: "Send JSON" }, 415);
+    const autoDiagnose = c.req.param("status") === "on";
+    await db.update(projects).set({ autoDiagnose }).where(eq(projects.id, c.get("projectId")));
+    return c.json({ autoDiagnose });
   });
 
   // Approving a lesson: the owner's own words (edited or as proposed) go to that agent from its next turn.

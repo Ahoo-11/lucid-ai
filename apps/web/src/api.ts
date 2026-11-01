@@ -105,6 +105,8 @@ export type Issue = {
   lessonsApply: boolean;
   /** The lesson applied for this problem, with its results since it went live. */
   lesson: AppliedLesson | null;
+  /** The owner took it out of the Inbox; it isn't diagnosed by itself. */
+  ignored: boolean;
 };
 
 export type Diagnosis =
@@ -274,7 +276,11 @@ export const api = {
   overview: () => request<Overview>("/overview"),
   runs: (params: URLSearchParams) => request<{ runs: RunListItem[]; nextBefore: string | null }>(`/runs?${params}`),
   run: (id: string) => request<RunDetail>(`/runs/${id}`),
-  issues: () => request<{ issues: Issue[]; diagnosisModel?: string | null }>("/issues"),
+  issues: () => request<{ issues: Issue[]; diagnosisModel?: string | null; autoDiagnose: boolean }>("/issues"),
+  /** Takes a problem out of the Inbox (or brings it back). */
+  ignoreIssue: (issueId: string, ignore: boolean) =>
+    request<{ ignored: boolean }>(`/issues/${encodeURIComponent(issueId)}/${ignore ? "ignore" : "restore"}`, { method: "POST", body: "{}" }),
+  setAutoDiagnose: (on: boolean) => request<{ autoDiagnose: boolean }>(`/settings/auto-diagnose/${on ? "on" : "off"}`, { method: "POST", body: "{}" }),
   /** Asks the model to diagnose one problem; spends credits, so only on a click. */
   diagnose: (issueId: string) => request<{ diagnosis: Diagnosis }>(`/issues/${encodeURIComponent(issueId)}/diagnose`, { method: "POST", body: "{}" }),
   /** Approves a lesson (as written here) for the problem's agent, from its next turn. */

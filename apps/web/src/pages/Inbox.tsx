@@ -1,11 +1,30 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, ChevronRight, Copy, Loader2, TriangleAlert } from "lucide-react";
-import { type ReactNode, useState } from "react";
-import { Link } from "react-router";
+import {
+  ArrowLeft,
+  Bot,
+  CheckCircle2,
+  ChevronRight,
+  CircleCheck,
+  Copy,
+  EyeOff,
+  FileText,
+  Globe,
+  Info,
+  Loader2,
+  Pencil,
+  Plug,
+  Sparkles,
+  SquareTerminal,
+  TriangleAlert,
+  UserRound,
+  Wrench,
+} from "lucide-react";
+import { type ReactNode, useEffect, useState, useSyncExternalStore } from "react";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
 import { type AppliedLesson, type Diagnosis, type Issue, api } from "../api";
 import { ago, harnessLabel, plural } from "../format";
 import { BRANDS, BrandMark } from "../landing/logos";
-import { Card, Empty, cx } from "../ui";
+import { CopyButton, Empty, cx } from "../ui";
 
 /** Problems that hit more than one run are patterns worth fixing; the rest are listed separately. */
 export const isRecurring = (issue: Issue) => issue.runs >= 2;
@@ -13,10 +32,11 @@ export const isRecurring = (issue: Issue) => issue.runs >= 2;
 /** Enough runs without the failure to call a fix working. */
 const FIXED_AFTER_RUNS = 3;
 
-/** Where a problem stands: it decides the card's place, dot and pill. */
-type Stage = "needs" | "still" | "diagnosing" | "sent" | "live" | "fixed" | "once";
+/** Where a problem stands: it decides the list it's in, its pill and its place. */
+type Stage = "needs" | "still" | "diagnosing" | "sent" | "live" | "fixed" | "once" | "ignored";
 
 function stageOf(issue: Issue): Stage {
+  if (issue.ignored) return "ignored";
   const state = outcome(issue.lesson);
   if (state === "fixed") return "fixed";
   if (state === "live") return "live";
@@ -29,15 +49,59 @@ function stageOf(issue: Issue): Stage {
 /** Recurring problems with no working fix yet: what the Inbox badge counts. */
 export const needsFix = (issue: Issue) => ["needs", "still", "diagnosing"].includes(stageOf(issue));
 
-const STAGE: Record<Stage, { dot: string; pill?: [label: string, className: string]; rank: number }> = {
-  needs: { dot: "bg-rose-500", pill: ["Needs a fix", "bg-rose-100 text-rose-800 dark:bg-rose-500/15 dark:text-rose-300"], rank: 0 },
-  still: { dot: "bg-amber-500", pill: ["Still happening", "bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300"], rank: 0 },
-  diagnosing: { dot: "animate-pulse bg-zinc-300 dark:bg-zinc-600", rank: 1 },
-  sent: { dot: "bg-sky-500", pill: ["Fix sent", "bg-sky-100 text-sky-800 dark:bg-sky-500/15 dark:text-sky-300"], rank: 2 },
-  live: { dot: "bg-emerald-500", pill: ["Fix live", "bg-emerald-100 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300"], rank: 2 },
-  fixed: { dot: "bg-emerald-500", pill: ["Fixed", "bg-emerald-100 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300"], rank: 3 },
-  once: { dot: "bg-zinc-300 dark:bg-zinc-600", rank: 3 },
+type Tone = "rose" | "amber" | "sky" | "emerald" | "zinc";
+
+const PILL: Record<Tone, string> = {
+  rose: "bg-rose-50 text-rose-700 ring-rose-600/15 dark:bg-rose-500/10 dark:text-rose-300 dark:ring-rose-400/20",
+  amber: "bg-amber-50 text-amber-800 ring-amber-600/20 dark:bg-amber-500/10 dark:text-amber-300 dark:ring-amber-400/20",
+  sky: "bg-sky-50 text-sky-700 ring-sky-600/15 dark:bg-sky-500/10 dark:text-sky-300 dark:ring-sky-400/20",
+  emerald: "bg-emerald-50 text-emerald-700 ring-emerald-600/15 dark:bg-emerald-500/10 dark:text-emerald-300 dark:ring-emerald-400/20",
+  zinc: "bg-zinc-100 text-zinc-600 ring-zinc-500/10 dark:bg-zinc-800 dark:text-zinc-300 dark:ring-white/10",
 };
+
+const STAGE: Record<Stage, { label: string; tone: Tone; rank: number }> = {
+  still: { label: "Still happening", tone: "amber", rank: 0 },
+  needs: { label: "Needs a fix", tone: "rose", rank: 1 },
+  diagnosing: { label: "Diagnosing", tone: "zinc", rank: 2 },
+  sent: { label: "Fix sent", tone: "sky", rank: 0 },
+  live: { label: "Fix live", tone: "emerald", rank: 1 },
+  fixed: { label: "Fixed", tone: "emerald", rank: 0 },
+  once: { label: "One-off", tone: "zinc", rank: 0 },
+  ignored: { label: "Ignored", tone: "zinc", rank: 0 },
+};
+
+/** The Inbox's lists: the three tiles at the top, and the two links under the list. */
+type View = "needs" | "fixing" | "fixed" | "once" | "ignored";
+
+const VIEW_OF: Record<Stage, View> = { needs: "needs", still: "needs", diagnosing: "needs", sent: "fixing", live: "fixing", fixed: "fixed", once: "once", ignored: "ignored" };
+
+const TILES: { view: View; label: string; dot: string }[] = [
+  { view: "needs", label: "Need a fix", dot: "bg-rose-500" },
+  { view: "fixing", label: "Being fixed", dot: "bg-sky-500" },
+  { view: "fixed", label: "Fixed", dot: "bg-emerald-500" },
+];
+
+const EMPTY: Record<View, [title: string, text: string]> = {
+  needs: ["Nothing needs a fix", "When an agent keeps failing the same way, it shows up here with a fix you can approve."],
+  fixing: ["No fixes being tried", "Approve a fix and Lucid watches whether the problem stops."],
+  fixed: ["Nothing fixed yet", `A fix lands here once the agent runs ${FIXED_AFTER_RUNS} times without the problem.`],
+  once: ["No one-off errors", "Errors that happened in a single run show up here."],
+  ignored: ["Nothing ignored", "Problems you ignore wait here, in case you want them back."],
+};
+
+const WIDE = "(min-width: 1024px)";
+
+/** Side by side on a wide screen; on a phone the problem opens over the list. */
+function useWide() {
+  return useSyncExternalStore(
+    (onChange) => {
+      const media = matchMedia(WIDE);
+      media.addEventListener("change", onChange);
+      return () => media.removeEventListener("change", onChange);
+    },
+    () => matchMedia(WIDE).matches,
+  );
+}
 
 export function Inbox() {
   const query = useQuery({
@@ -51,62 +115,222 @@ export function Inbox() {
           ? 10_000
           : false,
   });
-  // One card open at a time, and one folded list.
-  const [open, setOpen] = useState<string | null>(null);
-  const [fold, setFold] = useState<"fixed" | "once" | null>(null);
+  const wide = useWide();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [params, setParams] = useSearchParams();
+  const view: View = (Object.keys(EMPTY) as View[]).find((v) => v === params.get("view")) ?? "needs";
   const all = query.data?.issues ?? [];
-  // What needs you first, then what's being diagnosed, then fixes being watched.
-  const current = all.filter((issue) => STAGE[stageOf(issue)].rank < 3).sort((a, b) => STAGE[stageOf(a)].rank - STAGE[stageOf(b)].rank);
-  const fixed = all.filter((issue) => stageOf(issue) === "fixed");
-  const oneOffs = all.filter((issue) => stageOf(issue) === "once");
   const model = query.data?.diagnosisModel ?? null;
-  const card = (issue: Issue) => (
-    <IssueCard key={issue.id} issue={issue} model={model} open={open === issue.id} onToggle={() => setOpen(open === issue.id ? null : issue.id)} />
+  const count = (v: View) => all.filter((issue) => VIEW_OF[stageOf(issue)] === v).length;
+  // Server order is most runs first; within a list, what needs you comes first.
+  const shown = all.filter((issue) => VIEW_OF[stageOf(issue)] === view).sort((a, b) => STAGE[stageOf(a)].rank - STAGE[stageOf(b)].rank);
+  const picked = params.get("problem");
+  const selected = all.find((issue) => issue.id === picked) ?? (wide ? shown[0] : undefined);
+
+  const update = (change: (next: URLSearchParams) => void, sheet = false) =>
+    setParams(
+      (current) => {
+        const next = new URLSearchParams(current);
+        change(next);
+        return next;
+      },
+      // On a phone, opening a problem is a step Back undoes.
+      { replace: !sheet, state: sheet ? { sheet: true } : undefined },
+    );
+  const select = (id: string | null) => update((next) => (id ? next.set("problem", id) : next.delete("problem")), !wide && !!id);
+  const showView = (v: View) =>
+    update((next) => {
+      if (v === "needs") next.delete("view");
+      else next.set("view", v);
+      next.delete("problem");
+    });
+  const close = () => ((location.state as { sheet?: boolean } | null)?.sheet ? navigate(-1) : select(null));
+  // Ignoring one moves on to the next problem in the list.
+  const afterIgnore = (id: string) => {
+    const at = shown.findIndex((issue) => issue.id === id);
+    select(wide ? (shown[at + 1]?.id ?? shown[at - 1]?.id ?? null) : null);
+  };
+
+  // On a wide screen the first problem is open from the start, and stays put when it changes list.
+  useEffect(() => {
+    if (wide && !picked && shown[0]) select(shown[0].id);
+  });
+  // The open problem covers the page on a phone; the page behind it shouldn't scroll.
+  const sheet = !wide && !!selected;
+  useEffect(() => {
+    if (!sheet) return;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = "";
+    };
+  }, [sheet]);
+
+  const panel = selected && (
+    <ProblemPanel
+      key={`${selected.id}:${selected.diagnosis?.status === "ready" ? selected.diagnosis.at : ""}:${selected.lesson?.id ?? ""}:${selected.lesson?.status ?? ""}`}
+      issue={selected}
+      model={model}
+      onClose={wide ? undefined : close}
+      onIgnored={() => afterIgnore(selected.id)}
+    />
   );
+
   return (
-    <div className="space-y-5">
-      <div>
-        <h1 className="text-xl font-semibold">Inbox</h1>
-        <p className="text-sm text-zinc-500 dark:text-zinc-400">Problems your agents keep running into, and a fix you can approve.</p>
-        {model && (
-          <p className="mt-2 inline-flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
-            {isMuse(model) && <BrandMark brand={BRANDS.meta} className="size-3.5" />}
-            {isMuse(model) ? "Meta's Muse Spark" : model} diagnoses each recurring problem by itself, up to 20 a day.
-          </p>
+    <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] lg:items-start lg:gap-6 xl:grid-cols-[30rem_minmax(0,1fr)]">
+      <div className="min-w-0 space-y-5">
+        <div>
+          <div className="flex items-center justify-between gap-4">
+            <h1 className="text-xl font-semibold">Inbox</h1>
+            {model && query.data && <AutoDiagnose model={model} on={query.data.autoDiagnose} />}
+          </div>
+          <p className="text-sm text-zinc-500 dark:text-zinc-400">Problems your agents keep running into, and fixes you can approve.</p>
+        </div>
+
+        <div className="grid grid-cols-3 gap-2">
+          {TILES.map((tile) => (
+            <button
+              key={tile.view}
+              type="button"
+              onClick={() => showView(tile.view)}
+              aria-pressed={view === tile.view}
+              className={cx(
+                "rounded-xl border bg-white px-3.5 py-3 text-left transition-colors dark:bg-zinc-900",
+                view === tile.view
+                  ? "border-zinc-900 ring-1 ring-zinc-900 dark:border-zinc-200 dark:ring-zinc-200"
+                  : "border-zinc-200 hover:border-zinc-300 dark:border-zinc-800 dark:hover:border-zinc-700",
+              )}
+            >
+              <span className="block text-2xl font-semibold tabular-nums">{query.isPending ? "–" : count(tile.view)}</span>
+              <span className="mt-0.5 flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
+                <span className={cx("size-1.5 shrink-0 rounded-full", tile.dot)} aria-hidden />
+                <span className="truncate">{tile.label}</span>
+              </span>
+            </button>
+          ))}
+        </div>
+
+        {view === "once" || view === "ignored" ? (
+          <button type="button" onClick={() => showView("needs")} className="inline-flex items-center gap-1 text-sm font-medium text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white">
+            <ArrowLeft className="size-4" />
+            {view === "once" ? "One-off errors" : "Ignored problems"}
+          </button>
+        ) : null}
+
+        {query.isPending ? (
+          <div className="text-sm text-zinc-500">Loading…</div>
+        ) : shown.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-zinc-300 dark:border-zinc-700">
+            <Empty icon={<CheckCircle2 className="size-7 text-emerald-500" />} title={EMPTY[view][0]}>
+              {EMPTY[view][1]}{" "}
+              {view === "needs" && (
+                <Link to="/runs" className="font-medium text-zinc-700 underline underline-offset-2 dark:text-zinc-200">
+                  See all runs
+                </Link>
+              )}
+            </Empty>
+          </div>
+        ) : (
+          <ul className="space-y-2">
+            {shown.map((issue) => (
+              <li key={issue.id}>
+                <ProblemCard issue={issue} model={model} selected={selected?.id === issue.id} onSelect={() => select(issue.id)} />
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {(view === "needs" || view === "fixing" || view === "fixed") && (count("once") > 0 || count("ignored") > 0) && (
+          <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-zinc-500 dark:text-zinc-400">
+            {count("once") > 0 && <MoreLink label={`One-off errors (${count("once")})`} onClick={() => showView("once")} />}
+            {count("ignored") > 0 && <MoreLink label={`Ignored (${count("ignored")})`} onClick={() => showView("ignored")} />}
+          </div>
         )}
       </div>
-      {query.isPending ? (
-        <div className="text-sm text-zinc-500">Loading…</div>
-      ) : current.length === 0 ? (
-        <Card>
-          <Empty icon={<CheckCircle2 className="size-8 text-emerald-500" />} title="Nothing to fix right now">
-            When an agent keeps failing the same way, it shows up here with a fix. <Link to="/runs" className="text-brand-700 underline">See all runs</Link>.
-          </Empty>
-        </Card>
+
+      {wide ? (
+        <aside className="sticky top-20 h-[calc(100dvh-6.5rem)] min-w-0">
+          {panel || (
+            <div className="flex h-full items-center justify-center rounded-xl border border-dashed border-zinc-300 p-8 text-center text-sm text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
+              When a problem shows up, what happened and the fix open here.
+            </div>
+          )}
+        </aside>
       ) : (
-        <div className="space-y-3">{current.map(card)}</div>
-      )}
-      {(fixed.length > 0 || oneOffs.length > 0) && (
-        <div className="space-y-3">
-          <div className="flex flex-wrap items-center gap-x-2 text-sm text-zinc-500 dark:text-zinc-400">
-            {fixed.length > 0 && <Fold label={`Fixed (${fixed.length})`} open={fold === "fixed"} onClick={() => setFold(fold === "fixed" ? null : "fixed")} />}
-            {fixed.length > 0 && oneOffs.length > 0 && <span aria-hidden>·</span>}
-            {oneOffs.length > 0 && <Fold label={`One-off errors (${oneOffs.length})`} open={fold === "once"} onClick={() => setFold(fold === "once" ? null : "once")} />}
+        panel && (
+          <div role="dialog" aria-modal="true" aria-label="Problem" className="fixed inset-0 z-30 bg-white motion-safe:animate-[rise_.18s_ease-out] dark:bg-zinc-950">
+            {panel}
           </div>
-          {fold === "fixed" && fixed.map(card)}
-          {fold === "once" && oneOffs.map(card)}
-        </div>
+        )
       )}
     </div>
   );
 }
 
-function Fold({ label, open, onClick }: { label: string; open: boolean; onClick: () => void }) {
+function MoreLink({ label, onClick }: { label: string; onClick: () => void }) {
   return (
-    <button type="button" onClick={onClick} aria-expanded={open} className="inline-flex items-center gap-1 font-medium hover:text-zinc-900 dark:hover:text-zinc-100">
-      <ChevronRight className={cx("size-4 transition", open && "rotate-90")} />
+    <button type="button" onClick={onClick} className="inline-flex items-center gap-0.5 font-medium hover:text-zinc-900 dark:hover:text-zinc-100">
       {label}
+      <ChevronRight className="size-4" />
     </button>
+  );
+}
+
+/** The switch for diagnosing recurring problems without a click. */
+function AutoDiagnose({ model, on }: { model: string; on: boolean }) {
+  const queryClient = useQueryClient();
+  const toggle = useMutation({
+    mutationFn: (next: boolean) => api.setAutoDiagnose(next),
+    onSuccess: ({ autoDiagnose }) => queryClient.setQueryData<{ autoDiagnose: boolean }>(["issues"], (old) => old && { ...old, autoDiagnose }),
+    onSettled: () => void queryClient.invalidateQueries({ queryKey: ["issues"] }),
+  });
+  const value = toggle.isPending ? toggle.variables : on;
+  return (
+    <label
+      className="flex shrink-0 cursor-pointer items-center gap-2 text-xs font-medium text-zinc-600 dark:text-zinc-300"
+      title={`${modelLabel(model)} diagnoses each recurring problem by itself, up to 20 a day. Off: only when you click Diagnose.`}
+    >
+      {isMuse(model) && <BrandMark brand={BRANDS.meta} className="size-4" />}
+      <span>
+        Auto-diagnose<span className="hidden sm:inline"> with {modelLabel(model)}</span>
+      </span>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={value}
+        aria-label={`Auto-diagnose with ${modelLabel(model)}`}
+        onClick={() => toggle.mutate(!value)}
+        className={cx("relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors", value ? "bg-zinc-900 dark:bg-zinc-100" : "bg-zinc-200 dark:bg-zinc-700")}
+      >
+        <span className={cx("size-4 rounded-full transition-transform", value ? "translate-x-[18px] bg-white dark:bg-zinc-900" : "translate-x-0.5 bg-white dark:bg-zinc-300")} />
+      </button>
+    </label>
+  );
+}
+
+function Pill({ stage }: { stage: Stage }) {
+  const { label, tone } = STAGE[stage];
+  return <span className={cx("inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[11px] font-medium whitespace-nowrap ring-1 ring-inset", PILL[tone])}>{label}</span>;
+}
+
+/** A picture of where it broke: a command, a file, the web, a model call. */
+function iconFor(issue: Issue) {
+  const tool = (issue.toolName ?? "").toLowerCase();
+  if (issue.kind === "llm") return Sparkles;
+  if (tool.startsWith("mcp__")) return Plug;
+  if (/web|fetch|browser|http|url|navigate/.test(tool)) return Globe;
+  if (/bash|shell|terminal|exec|command|code|run/.test(tool)) return SquareTerminal;
+  if (/read|write|edit|file|glob|grep|patch|notebook|search/.test(tool)) return FileText;
+  if (/agent|task|delegate/.test(tool)) return Bot;
+  return Wrench;
+}
+
+function ProblemIcon({ issue, large }: { issue: Issue; large?: boolean }) {
+  const Icon = iconFor(issue);
+  return (
+    <span className={cx("grid shrink-0 place-items-center rounded-lg bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300", large ? "size-10" : "size-9")} aria-hidden>
+      <Icon className={large ? "size-5" : "size-[18px]"} />
+    </span>
   );
 }
 
@@ -124,193 +348,330 @@ function outcome(lesson: AppliedLesson | null): Outcome | null {
   return (lesson.runsSince ?? 0) >= FIXED_AFTER_RUNS ? "fixed" : "live";
 }
 
-/** The card's one line under the headline: what it means for you, or how the fix is doing. */
+const readyDiagnosis = (issue: Issue) => (issue.diagnosis?.status === "ready" ? issue.diagnosis : null);
+
+/** The card's line under the headline: what it means for you, or how the fix is doing. */
 function summaryOf(issue: Issue, stage: Stage, model: string | null): ReactNode {
   const agent = harnessLabel(issue.lesson?.harness ?? issue.harness);
   const runs = issue.lesson?.runsSince ?? 0;
   const failures = issue.lesson?.failuresSince ?? 0;
-  const ai = issue.diagnosis?.status === "ready" ? issue.diagnosis : null;
+  const ai = readyDiagnosis(issue);
   switch (stage) {
     case "still":
       return `The fix didn't stop it: ${plural(failures, "failure")} in ${plural(runs, "run")} since it went live.`;
     case "sent":
-      return `Fix sent. Waiting for ${agent} to pick it up.`;
+      return `Waiting for ${agent} to pick up the fix.`;
     case "live":
-      return runs ? `The fix is live in ${agent}: no failures in ${plural(runs, "run")} so far.` : `The fix is live in ${agent}. Results show after its next runs.`;
+      return runs ? `No failures in ${plural(runs, "run")} since the fix went live.` : `The fix is live in ${agent}. Results show after its next runs.`;
     case "fixed":
-      return `Working: no failures in ${plural(runs, "run")} since the fix went live.`;
+      return `No failures in ${plural(runs, "run")} since the fix went live.`;
+    case "diagnosing":
+      return (
+        <span className="inline-flex items-center gap-1.5">
+          <Loader2 className="size-3.5 animate-spin" />
+          {model ? modelLabel(model) : "Lucid"} is looking into this…
+        </span>
+      );
     default:
-      if (issue.diagnosis?.status === "pending") {
-        return (
-          <span className="inline-flex items-center gap-1.5">
-            <Loader2 className="size-3.5 animate-spin" />
-            {model ? modelLabel(model) : "Lucid"} is looking into this…
-          </span>
-        );
-      }
       return ai?.summary ?? (ai ?? issue).why;
   }
 }
 
-function IssueCard({ issue, model, open, onToggle }: { issue: Issue; model: string | null; open: boolean; onToggle: () => void }) {
-  // The model's diagnosis once there is one; Lucid's rule of thumb until then.
-  const ai = issue.diagnosis?.status === "ready" ? issue.diagnosis : null;
+function ProblemCard({ issue, model, selected, onSelect }: { issue: Issue; model: string | null; selected: boolean; onSelect: () => void }) {
   const stage = stageOf(issue);
-  const { dot, pill } = STAGE[stage];
+  const ai = readyDiagnosis(issue);
   const watching = issue.lesson?.status === "active" && issue.lesson.deliveredAt;
-  // Without a summary from the model the card's line is already "what happened"; don't say it twice.
-  const whyOnCard = (stage === "needs" || stage === "once") && issue.diagnosis?.status !== "pending" && !ai?.summary;
   return (
-    <Card className="p-4">
-      <div className="flex items-start gap-3">
-        <span className={cx("mt-1.5 size-2.5 shrink-0 rounded-full", dot)} aria-hidden />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-start justify-between gap-3">
-            <h2 className="font-semibold">{(ai ?? issue).title}</h2>
-            {pill && <span className={cx("shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold", pill[1])}>{pill[0]}</span>}
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-current={selected || undefined}
+      className={cx(
+        "flex w-full items-start gap-3 rounded-xl border bg-white p-3.5 text-left transition-colors dark:bg-zinc-900",
+        selected
+          ? "border-zinc-900 ring-1 ring-zinc-900 dark:border-zinc-200 dark:ring-zinc-200"
+          : "border-zinc-200 hover:border-zinc-300 dark:border-zinc-800 dark:hover:border-zinc-700",
+      )}
+    >
+      <ProblemIcon issue={issue} />
+      <span className="min-w-0 flex-1">
+        <span className="flex items-start justify-between gap-2">
+          <span className="text-[15px] leading-snug font-medium">{(ai ?? issue).title}</span>
+          <Pill stage={stage} />
+        </span>
+        <span className="mt-1 line-clamp-2 text-sm text-zinc-500 dark:text-zinc-400">{summaryOf(issue, stage, model)}</span>
+        <span className="mt-2 block text-xs text-zinc-400 dark:text-zinc-500">
+          {harnessLabel(issue.harness)} · {plural(issue.runs, "run")}
+          {watching ? ` · fix live ${ago(issue.lesson!.deliveredAt)}` : issue.lastSeen && ` · ${ago(issue.lastSeen)}`}
+        </span>
+      </span>
+    </button>
+  );
+}
+
+const PRIMARY =
+  "inline-flex h-9 items-center justify-center gap-1.5 rounded-lg bg-brand-300 px-4 text-sm font-semibold text-zinc-950 ring-1 ring-black/5 ring-inset transition-colors hover:bg-brand-200 disabled:opacity-50";
+const SECONDARY =
+  "inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:bg-transparent dark:text-zinc-200 dark:hover:bg-white/5";
+const QUIET =
+  "inline-flex h-9 items-center justify-center gap-1.5 rounded-lg px-3 text-sm font-medium text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-50 dark:text-zinc-400 dark:hover:bg-white/5 dark:hover:text-white";
+
+type Tab = "diagnosis" | "runs" | "error";
+
+/** One problem, opened: what happened and the fix, the runs it hit, and the raw error. */
+function ProblemPanel({ issue, model, onClose, onIgnored }: { issue: Issue; model: string | null; onClose?: () => void; onIgnored: () => void }) {
+  const queryClient = useQueryClient();
+  const [tab, setTab] = useState<Tab>("diagnosis");
+  const stage = stageOf(issue);
+  const ai = readyDiagnosis(issue);
+  const agent = harnessLabel(issue.harness);
+  const active = issue.lesson?.status === "active" ? issue.lesson : null;
+  // The lesson to approve: the one turned off, in the owner's words, unless the model wrote a newer one.
+  const turnedOff = !active && !!issue.lesson && (!ai?.lesson || ai.at < issue.lesson.createdAt);
+  const proposed = active ? null : turnedOff ? issue.lesson!.text : (ai?.lesson ?? null);
+  const [text, setText] = useState(proposed ?? "");
+  const [copied, setCopied] = useState(false);
+  const refresh = () => void queryClient.invalidateQueries({ queryKey: ["issues"] });
+  const patch = (change: Partial<Issue>) =>
+    queryClient.setQueryData<{ issues: Issue[] }>(["issues"], (old) => old && { ...old, issues: old.issues.map((i) => (i.id === issue.id ? { ...i, ...change } : i)) });
+
+  const apply = useMutation({ mutationFn: () => api.applyLesson(issue.id, text), onSettled: refresh });
+  const turnOff = useMutation({ mutationFn: () => api.setLesson(active!.id, false), onSettled: refresh });
+  const ignore = useMutation({
+    mutationFn: (on: boolean) => api.ignoreIssue(issue.id, on),
+    onSuccess: ({ ignored }) => {
+      patch({ ignored });
+      if (ignored) onIgnored();
+    },
+    onSettled: refresh,
+  });
+  const diagnose = useMutation({
+    mutationFn: () => api.diagnose(issue.id),
+    // Show it as running at once, so "Run again" doesn't flash the old one.
+    onSuccess: ({ diagnosis }) => patch({ diagnosis }),
+    onSettled: refresh,
+  });
+  const pending = diagnose.isPending || issue.diagnosis?.status === "pending";
+  const copy = () => void navigator.clipboard.writeText(text).then(() => setCopied(true));
+  const error = [apply, turnOff, ignore, diagnose].find((m) => m.isError)?.error;
+
+  const primary = issue.ignored ? (
+    <button type="button" onClick={() => ignore.mutate(false)} disabled={ignore.isPending} className={SECONDARY}>
+      Bring it back
+    </button>
+  ) : active ? (
+    <button type="button" onClick={() => turnOff.mutate()} disabled={turnOff.isPending} className={SECONDARY}>
+      {turnOff.isPending && <Loader2 className="size-3.5 animate-spin" />}
+      Turn off fix
+    </button>
+  ) : proposed && issue.lessonsApply ? (
+    <button type="button" onClick={() => apply.mutate()} disabled={apply.isPending || !text.trim()} className={PRIMARY}>
+      {apply.isPending && <Loader2 className="size-3.5 animate-spin" />}
+      {turnedOff ? `Apply to ${agent} again` : `Apply fix to ${agent}`}
+    </button>
+  ) : proposed ? (
+    <button type="button" onClick={copy} disabled={!text.trim()} className={PRIMARY}>
+      <Copy className="size-3.5" />
+      {copied ? "Copied" : "Copy fix"}
+    </button>
+  ) : model && !ai && !pending ? (
+    <button type="button" onClick={() => diagnose.mutate()} className={PRIMARY}>
+      {isMuse(model) && <BrandMark brand={BRANDS.meta} className="size-4" />}
+      {issue.diagnosis?.status === "failed" ? "Try again" : `Diagnose with ${modelLabel(model)}`}
+    </button>
+  ) : null;
+
+  return (
+    <div className={cx("flex h-full flex-col bg-white dark:bg-zinc-900", !onClose && "overflow-hidden rounded-xl border border-zinc-200 dark:border-zinc-800")}>
+      {onClose && (
+        <div className="flex h-12 shrink-0 items-center border-b border-zinc-100 px-2 dark:border-zinc-800">
+          <button type="button" onClick={onClose} className={QUIET}>
+            <ArrowLeft className="size-4" />
+            Inbox
+          </button>
+        </div>
+      )}
+      <div className="shrink-0 px-5 pt-5">
+        <div className="flex items-start gap-3">
+          <ProblemIcon issue={issue} large />
+          <div className="min-w-0 flex-1">
+            <h2 className="text-lg leading-snug font-semibold">{(ai ?? issue).title}</h2>
+            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-zinc-500 dark:text-zinc-400">
+              <Pill stage={stage} />
+              <span>
+                {agent} · {plural(issue.runs, "failed run")}
+                {issue.lastSeen && ` · last ${ago(issue.lastSeen)}`}
+              </span>
+            </div>
           </div>
-          <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-300">{summaryOf(issue, stage, model)}</p>
-          <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-            <span className="text-xs text-zinc-500 dark:text-zinc-400">
-              {harnessLabel(issue.harness)} · {plural(issue.runs, "run")}
-              {watching ? ` · fix live ${ago(issue.lesson!.deliveredAt)}` : issue.lastSeen && ` · last ${ago(issue.lastSeen)}`}
-            </span>
-            <button
-              type="button"
-              onClick={onToggle}
-              aria-expanded={open}
-              className="rounded-full px-3 py-1 text-xs font-medium ring-1 ring-zinc-200 transition hover:bg-zinc-50 dark:ring-white/15 dark:hover:bg-white/5"
-            >
-              {open ? "Hide" : stage === "needs" || stage === "still" || stage === "once" ? "See details and fix" : "Details"}
-            </button>
-          </div>
-          {open && <Details issue={issue} model={model} whyOnCard={whyOnCard} />}
+        </div>
+        <div role="tablist" className="mt-5 flex gap-5 border-b border-zinc-200 text-sm dark:border-zinc-800">
+          <TabButton tab="diagnosis" current={tab} onClick={setTab}>
+            Diagnosis
+          </TabButton>
+          <TabButton tab="runs" current={tab} onClick={setTab}>
+            Runs <span className="ml-0.5 rounded-full bg-zinc-100 px-1.5 text-xs tabular-nums text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">{issue.runs}</span>
+          </TabButton>
+          <TabButton tab="error" current={tab} onClick={setTab}>
+            Error
+          </TabButton>
         </div>
       </div>
-    </Card>
-  );
-}
 
-function Section({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div>
-      <div className="mb-1.5 text-xs font-medium text-zinc-500 dark:text-zinc-400">{label}</div>
-      {children}
-    </div>
-  );
-}
-
-const BOX = "rounded-lg bg-zinc-50 px-3 py-2.5 text-sm leading-relaxed ring-1 ring-zinc-200/70 dark:bg-white/[0.03] dark:ring-white/10";
-
-/** The opened card: what happened, the fix to approve, what only you can change, and where it came from. */
-function Details({ issue, model, whyOnCard }: { issue: Issue; model: string | null; whyOnCard: boolean }) {
-  const [raw, setRaw] = useState(false);
-  const ai = issue.diagnosis?.status === "ready" ? issue.diagnosis : null;
-  const agent = harnessLabel(issue.harness);
-  return (
-    <div className="mt-4 space-y-4 border-t border-zinc-100 pt-4 dark:border-white/10">
-      {!whyOnCard && (
-        <Section label="What happened">
-          <div className={BOX}>{(ai ?? issue).why}</div>
-        </Section>
-      )}
-      {issue.lesson?.status === "active" ? (
-        <Section label={`Fix for ${harnessLabel(issue.lesson.harness)}`}>
-          <ActiveLesson lesson={issue.lesson} />
-        </Section>
-      ) : ai?.lesson ? (
-        <Section label={`Fix for ${agent}`}>
-          <LessonEditor key={`${ai.at}${issue.lesson?.id ?? ""}`} issue={issue} proposed={ai.lesson} />
-        </Section>
-      ) : issue.lesson ? (
-        <Section label={`Fix for ${agent} (turned off)`}>
-          <LessonEditor key={issue.lesson.id} issue={issue} proposed={issue.lesson.text} turnedOff />
-        </Section>
-      ) : (
-        <Section label="How to fix it">
-          <div className={BOX}>{(ai ?? issue).fix}</div>
-        </Section>
-      )}
-      {ai?.manual && (
-        <Section label="Do this yourself">
-          <div className="rounded-lg bg-amber-50 px-3 py-2.5 text-sm leading-relaxed text-amber-900 dark:bg-amber-500/10 dark:text-amber-200">
-            {ai.manual} <span className="text-amber-700 dark:text-amber-300/80">Lucid never changes settings or permissions.</span>
+      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
+        {tab === "diagnosis" && (
+          <div className="space-y-3">
+            {pending && (
+              <div className="flex items-center gap-2.5 rounded-xl bg-zinc-50 px-4 py-3 text-sm text-zinc-600 dark:bg-white/[0.04] dark:text-zinc-300">
+                <Loader2 className="size-4 shrink-0 animate-spin" />
+                {model ? modelLabel(model) : "Lucid"} is reading the failed steps. This takes a few seconds.
+              </div>
+            )}
+            <Block icon={Info} title="What happened">
+              {(ai ?? issue).why}
+            </Block>
+            {active ? (
+              <ActiveFix lesson={active} />
+            ) : (
+              <Block icon={Wrench} title={ai ? "Recommended fix" : "How to fix it"}>
+                <FixSteps text={(ai ?? issue).fix} />
+                {proposed && (
+                  <Change agent={agent} text={text} onChange={setText} turnedOff={turnedOff}>
+                    {issue.lessonsApply
+                      ? `${agent} follows it from its next turn. You can turn it off any time.`
+                      : `Paste it into ${agent}'s instructions. Lucid can't apply it there by itself yet.`}
+                  </Change>
+                )}
+              </Block>
+            )}
+            {ai?.manual && (
+              <section className="rounded-xl bg-amber-50 p-4 dark:bg-amber-500/[0.07]">
+                <h3 className="flex items-center gap-2 text-sm font-semibold text-amber-900 dark:text-amber-200">
+                  <UserRound className="size-4" />
+                  Do this yourself
+                </h3>
+                <p className="mt-1.5 text-sm leading-relaxed text-amber-900/90 dark:text-amber-100/80">
+                  {ai.manual} <span className="text-amber-700 dark:text-amber-300/70">Lucid never changes settings or permissions.</span>
+                </p>
+              </section>
+            )}
+            {model && <DiagnosedBy diagnosis={issue.diagnosis} onRunAgain={() => diagnose.mutate()} busy={pending} />}
           </div>
-        </Section>
-      )}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-zinc-500 dark:text-zinc-400">
-        {model && <DiagnoseRow issue={issue} diagnosis={issue.diagnosis} model={model} />}
-        <button type="button" onClick={() => setRaw(!raw)} aria-expanded={raw} className="inline-flex items-center gap-0.5 font-medium hover:text-zinc-900 dark:hover:text-white">
-          <ChevronRight className={cx("size-3.5 transition", raw && "rotate-90")} />
-          Error and runs
-        </button>
+        )}
+        {tab === "runs" && <RunsTab issue={issue} />}
+        {tab === "error" && <ErrorTab issue={issue} />}
       </div>
-      {raw && <ErrorAndRuns issue={issue} />}
+
+      <div className="shrink-0 border-t border-zinc-200 px-5 py-3 dark:border-zinc-800">
+        {error && <p className="mb-2 text-xs text-rose-600 dark:text-rose-400">{error.message}</p>}
+        <div className="flex items-center gap-2">
+          {primary}
+          {!issue.ignored && !active && (
+            <button type="button" onClick={() => ignore.mutate(true)} disabled={ignore.isPending} className={cx(QUIET, "ml-auto")} title="Take it out of the Inbox. It won't be diagnosed by itself.">
+              <EyeOff className="size-4" />
+              Ignore
+            </button>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
 
-/** The lesson Muse Spark proposed, editable, applied only when the owner says so. */
-function LessonEditor({ issue, proposed, turnedOff }: { issue: Issue; proposed: string; turnedOff?: boolean }) {
-  const queryClient = useQueryClient();
-  const [text, setText] = useState(proposed);
-  const [copied, setCopied] = useState(false);
-  const agent = harnessLabel(issue.harness);
-  const apply = useMutation({
-    mutationFn: () => api.applyLesson(issue.id, text),
-    onSettled: () => void queryClient.invalidateQueries({ queryKey: ["issues"] }),
-  });
+function TabButton({ tab, current, onClick, children }: { tab: Tab; current: Tab; onClick: (tab: Tab) => void; children: ReactNode }) {
   return (
-    <div className="space-y-2.5 rounded-lg bg-white p-3 ring-1 ring-emerald-300/70 dark:bg-zinc-950 dark:ring-emerald-400/25">
-      <textarea
-        value={text}
-        onChange={(event) => setText(event.target.value)}
-        rows={2}
-        maxLength={400}
-        aria-label={`Lesson for ${agent}`}
-        className="w-full resize-y rounded-md bg-transparent text-sm leading-relaxed outline-none"
-      />
-      {apply.isError && <p className="text-xs text-rose-600 dark:text-rose-400">{apply.error.message}</p>}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        {issue.lessonsApply ? (
-          <>
-            <button
-              type="button"
-              onClick={() => apply.mutate()}
-              disabled={apply.isPending || !text.trim()}
-              className="inline-flex items-center gap-1.5 rounded-full bg-brand-300 px-3.5 py-1.5 text-sm font-semibold text-zinc-950 transition hover:bg-brand-200 disabled:opacity-50"
-            >
-              {apply.isPending && <Loader2 className="size-3.5 animate-spin" />}
-              {turnedOff ? `Apply to ${agent} again` : `Apply to ${agent}`}
-            </button>
-            <span className="text-xs text-zinc-500 dark:text-zinc-400">{agent} follows it from its next turn. Turn it off any time.</span>
-          </>
-        ) : (
-          <>
-            <button
-              type="button"
-              onClick={() => void navigator.clipboard.writeText(text).then(() => setCopied(true))}
-              className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium ring-1 ring-zinc-200 hover:bg-zinc-50 dark:ring-white/15 dark:hover:bg-white/5"
-            >
-              <Copy className="size-3.5" />
-              {copied ? "Copied" : "Copy"}
-            </button>
-            <span className="text-xs text-zinc-500 dark:text-zinc-400">Paste it into {agent}'s instructions. Lucid can't apply it there by itself yet.</span>
-          </>
-        )}
+    <button
+      type="button"
+      role="tab"
+      aria-selected={tab === current}
+      onClick={() => onClick(tab)}
+      className={cx(
+        "-mb-px inline-flex items-center border-b-2 pb-2.5 font-medium transition-colors",
+        tab === current ? "border-zinc-900 text-zinc-900 dark:border-zinc-100 dark:text-zinc-100" : "border-transparent text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200",
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+function Block({ icon: Icon, title, aside, children }: { icon: typeof Info; title: string; aside?: ReactNode; children: ReactNode }) {
+  return (
+    <section className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="flex items-center gap-2 text-sm font-semibold">
+          <Icon className="size-4 text-zinc-400" />
+          {title}
+        </h3>
+        {aside}
       </div>
+      <div className="mt-1.5 text-sm leading-relaxed text-zinc-600 dark:text-zinc-300">{children}</div>
+    </section>
+  );
+}
+
+/** The fix as steps when it has a few sentences; as a line when it has one. */
+function FixSteps({ text }: { text: string }) {
+  const steps = text
+    .split(/(?<=[.!?])\s+(?=[A-Z"“(])/)
+    .map((step) => step.trim())
+    .filter(Boolean);
+  if (steps.length < 2) return <p>{text}</p>;
+  return (
+    <ul className="space-y-1.5">
+      {steps.map((step) => (
+        <li key={step} className="flex gap-2">
+          <CircleCheck className="mt-0.5 size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+          <span>{step}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** The instruction the agent gets: read it, change it if you like, then approve it below. */
+function Change({ agent, text, onChange, turnedOff, children }: { agent: string; text: string; onChange: (text: string) => void; turnedOff: boolean; children: ReactNode }) {
+  const [editing, setEditing] = useState(false);
+  return (
+    <div className="mt-3.5">
+      <div className="overflow-hidden rounded-lg border border-zinc-200 dark:border-zinc-700/80">
+        <div className="flex items-center justify-between gap-2 border-b border-zinc-200 bg-zinc-50 py-1 pr-1 pl-3 text-xs text-zinc-500 dark:border-zinc-700/80 dark:bg-white/[0.03] dark:text-zinc-400">
+          <span>{turnedOff ? `Was in ${agent}'s instructions (turned off)` : `Adds to ${agent}'s instructions`}</span>
+          <button
+            type="button"
+            onClick={() => setEditing(!editing)}
+            className="inline-flex items-center gap-1 rounded-md px-2 py-1 font-medium hover:bg-zinc-200/60 hover:text-zinc-900 dark:hover:bg-white/10 dark:hover:text-white"
+          >
+            <Pencil className="size-3" />
+            {editing ? "Done" : "Edit"}
+          </button>
+        </div>
+        <div className="border-l-2 border-emerald-500 dark:border-emerald-400">
+          {editing ? (
+            <textarea
+              value={text}
+              onChange={(event) => onChange(event.target.value)}
+              rows={3}
+              maxLength={400}
+              autoFocus
+              // Typing carries on from the end of the instruction.
+              onFocus={(event) => event.currentTarget.setSelectionRange(text.length, text.length)}
+              aria-label={`Instruction for ${agent}`}
+              className="block w-full resize-y bg-transparent px-3 py-2.5 text-sm leading-relaxed text-zinc-900 outline-none dark:text-zinc-100"
+            />
+          ) : (
+            <p className="px-3 py-2.5 text-sm leading-relaxed text-zinc-900 dark:text-zinc-100">{text}</p>
+          )}
+        </div>
+      </div>
+      <p className="mt-1.5 text-xs text-zinc-500 dark:text-zinc-400">{children}</p>
     </div>
   );
 }
 
 /** An applied lesson: is the agent using it, and is the failure gone? */
-function ActiveLesson({ lesson }: { lesson: AppliedLesson }) {
-  const queryClient = useQueryClient();
+function ActiveFix({ lesson }: { lesson: AppliedLesson }) {
   const agent = harnessLabel(lesson.harness);
-  const turnOff = useMutation({
-    mutationFn: () => api.setLesson(lesson.id, false),
-    onSettled: () => void queryClient.invalidateQueries({ queryKey: ["issues"] }),
-  });
   const state = outcome(lesson);
   const failures = lesson.failuresSince ?? 0;
   const runs = lesson.runsSince ?? 0;
@@ -326,7 +687,7 @@ function ActiveLesson({ lesson }: { lesson: AppliedLesson }) {
       </span>
     ),
     live: (
-      <span className="text-zinc-600 dark:text-zinc-300">
+      <span>
         Live in {agent} since {ago(lesson.deliveredAt)}. {runs ? `No failures in ${plural(runs, "run")} so far.` : "Results show after its next runs."}
       </span>
     ),
@@ -339,25 +700,15 @@ function ActiveLesson({ lesson }: { lesson: AppliedLesson }) {
     recurring: (
       <span className="text-amber-700 dark:text-amber-400">
         <TriangleAlert className="mr-1 inline size-3.5" />
-        Still happening: {plural(failures, "failure")} in {plural(runs, "run")} since it went live. Turn it off and diagnose again.
+        Still happening: {plural(failures, "failure")} in {plural(runs, "run")} since it went live. Turn it off and diagnose it again.
       </span>
     ),
   };
   return (
-    <div className="space-y-2 rounded-lg bg-white p-3 ring-1 ring-emerald-300/70 dark:bg-zinc-950 dark:ring-emerald-400/25">
-      <p className="text-sm">“{lesson.text}”</p>
-      <div className="flex items-start justify-between gap-3 text-xs">
-        {state && <p>{status[state]}</p>}
-        <button
-          type="button"
-          onClick={() => turnOff.mutate()}
-          disabled={turnOff.isPending}
-          className="shrink-0 font-medium text-zinc-500 underline-offset-2 hover:text-zinc-900 hover:underline disabled:opacity-50 dark:text-zinc-400 dark:hover:text-white"
-        >
-          Turn off
-        </button>
-      </div>
-    </div>
+    <Block icon={Wrench} title={`Fix in ${agent}`}>
+      <p className="border-l-2 border-emerald-500 pl-3 text-zinc-900 dark:border-emerald-400 dark:text-zinc-100">{lesson.text}</p>
+      {state && <p className="mt-3 text-sm">{status[state]}</p>}
+    </Block>
   );
 }
 
@@ -369,99 +720,90 @@ function costLine(d: { inputTokens: number | null; outputTokens: number | null; 
   return { text, title };
 }
 
-/** Who diagnosed it and what it cost, or the button to ask for one. */
-function DiagnoseRow({ issue, diagnosis: d, model }: { issue: Issue; diagnosis: Diagnosis | null; model: string }) {
-  const queryClient = useQueryClient();
-  const diagnose = useMutation({
-    mutationFn: () => api.diagnose(issue.id),
-    // Show it as running at once, so "Run again" doesn't flash the old one.
-    onSuccess: ({ diagnosis }) =>
-      queryClient.setQueryData<{ issues: Issue[] }>(["issues"], (old) => old && { ...old, issues: old.issues.map((i) => (i.id === issue.id ? { ...i, diagnosis } : i)) }),
-    onSettled: () => void queryClient.invalidateQueries({ queryKey: ["issues"] }),
-  });
-  const name = modelLabel(model);
-  const logo = isMuse(model) && <BrandMark brand={BRANDS.meta} className="size-3.5" />;
-  const link = (label: string) => (
-    <button type="button" onClick={() => diagnose.mutate()} className="font-medium underline-offset-2 hover:text-zinc-900 hover:underline dark:hover:text-white">
+/** Who diagnosed it and what it cost, or why it couldn't. */
+function DiagnosedBy({ diagnosis: d, onRunAgain, busy }: { diagnosis: Diagnosis | null; onRunAgain: () => void; busy: boolean }) {
+  if (busy || !d || d.status === "pending") return null;
+  const again = (label: string) => (
+    <button type="button" onClick={onRunAgain} className="font-medium underline-offset-2 hover:text-zinc-900 hover:underline dark:hover:text-white">
       {label}
     </button>
   );
-
-  if (diagnose.isPending || d?.status === "pending") {
+  if (d.status === "failed") {
     return (
-      <span className="inline-flex items-center gap-1.5">
-        <Loader2 className="size-3 animate-spin" />
-        {name} is reading the failed steps…
-      </span>
-    );
-  }
-  if (diagnose.isError) {
-    return (
-      <>
-        <span className="text-rose-600 dark:text-rose-400">{diagnose.error.message}</span>
-        {link("Try again")}
-      </>
-    );
-  }
-  if (d?.status === "ready") {
-    const cost = costLine(d);
-    return (
-      <>
-        <span className="inline-flex items-center gap-1.5 font-medium text-zinc-700 dark:text-zinc-200">
-          {logo}
-          Diagnosed by {modelLabel(d.model)}
-        </span>
-        {cost.text && (
-          <span className="tabular-nums" title={cost.title}>
-            {cost.text}
-          </span>
-        )}
-        {link("Run again")}
-      </>
-    );
-  }
-  if (d?.status === "failed") {
-    return (
-      <>
+      <p className="flex flex-wrap items-center gap-x-2 gap-y-1 px-1 text-xs text-zinc-500 dark:text-zinc-400">
         <span className="text-rose-600 dark:text-rose-400" title={d.error}>
           Couldn't diagnose: {d.error.length > 90 ? `${d.error.slice(0, 89)}…` : d.error}
         </span>
-        {link("Try again")}
-      </>
+        {again("Try again")}
+      </p>
     );
   }
+  const cost = costLine(d);
   return (
-    <button
-      type="button"
-      onClick={() => diagnose.mutate()}
-      className="inline-flex items-center gap-1.5 rounded-full bg-white px-2.5 py-1 font-medium text-zinc-700 ring-1 ring-zinc-200 transition hover:bg-zinc-50 dark:bg-transparent dark:text-zinc-200 dark:ring-white/15 dark:hover:bg-white/5"
-    >
-      {logo}
-      Diagnose with {name}
-    </button>
+    <p className="flex flex-wrap items-center gap-x-2 gap-y-1 px-1 text-xs text-zinc-500 dark:text-zinc-400">
+      <span className="inline-flex items-center gap-1.5">
+        {isMuse(d.model) && <BrandMark brand={BRANDS.meta} className="size-3.5" />}
+        Diagnosed by {modelLabel(d.model)} {ago(d.at)}
+      </span>
+      {cost.text && (
+        <span className="tabular-nums" title={cost.title}>
+          · {cost.text}
+        </span>
+      )}
+      <span aria-hidden>·</span>
+      {again("Run again")}
+    </p>
   );
 }
 
-/** The raw error and example runs: for digging, not deciding. */
-function ErrorAndRuns({ issue }: { issue: Issue }) {
+/** The runs it hit, newest first, to open and read. */
+function RunsTab({ issue }: { issue: Issue }) {
   return (
-    <div className="space-y-2 text-xs">
-      {issue.sample && (
-        <pre className="rounded-lg bg-zinc-50 p-2 font-mono text-[11px] whitespace-pre-wrap text-zinc-600 [overflow-wrap:anywhere] dark:bg-zinc-950 dark:text-zinc-400">
-          {issue.sample.split("\n").slice(0, 6).join("\n")}
-        </pre>
-      )}
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-zinc-500">
-          {issue.toolName ? `${issue.toolName}, ` : ""}
-          {plural(issue.occurrences, "time")} in:
-        </span>
+    <div className="space-y-3">
+      <p className="text-sm text-zinc-600 dark:text-zinc-300">
+        Failed {plural(issue.occurrences, "time")} in {plural(issue.runs, "run")}
+        {issue.firstSeen && `, first ${ago(issue.firstSeen)}`}
+        {issue.lastSeen && `, last ${ago(issue.lastSeen)}`}.
+      </p>
+      <ul className="divide-y divide-zinc-100 overflow-hidden rounded-xl border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
         {issue.examples.map((example) => (
-          <Link key={example.runId} to={`/runs/${example.runId}`} className="max-w-64 truncate rounded-md bg-zinc-100 px-2 py-0.5 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700">
-            {example.runName ?? "Run"}
-          </Link>
+          <li key={example.runId}>
+            <Link to={`/runs/${example.runId}`} className="flex items-center gap-3 px-4 py-3 text-sm hover:bg-zinc-50 dark:hover:bg-white/[0.03]">
+              <span className="size-2 shrink-0 rounded-full bg-rose-500" aria-hidden />
+              <span className="min-w-0 flex-1 truncate">{example.runName ?? "Run"}</span>
+              <ChevronRight className="size-4 shrink-0 text-zinc-400" />
+            </Link>
+          </li>
         ))}
-      </div>
+      </ul>
+      {issue.runs > issue.examples.length && <p className="text-xs text-zinc-500 dark:text-zinc-400">The latest {issue.examples.length} are shown.</p>}
+    </div>
+  );
+}
+
+/** The raw error: for digging, not deciding. */
+function ErrorTab({ issue }: { issue: Issue }) {
+  return (
+    <div className="space-y-3">
+      <p className="text-sm text-zinc-600 dark:text-zinc-300">
+        {issue.toolName ? (
+          <>
+            The <span className="font-mono text-[13px]">{issue.toolName}</span> step failed with:
+          </>
+        ) : (
+          "The step failed with:"
+        )}
+      </p>
+      {issue.sample ? (
+        <div className="overflow-hidden rounded-xl border border-zinc-200 dark:border-zinc-800">
+          <div className="flex justify-end border-b border-zinc-200 bg-zinc-50 px-1 py-0.5 dark:border-zinc-800 dark:bg-white/[0.03]">
+            <CopyButton text={issue.sample} />
+          </div>
+          <pre className="max-h-96 overflow-auto p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap text-zinc-700 [overflow-wrap:anywhere] dark:text-zinc-300">{issue.sample}</pre>
+        </div>
+      ) : (
+        <p className="text-sm text-zinc-500">No message was recorded.</p>
+      )}
     </div>
   );
 }

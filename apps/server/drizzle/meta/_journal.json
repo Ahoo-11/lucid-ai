@@ -78,6 +78,13 @@
       "when": 1793549563070,
       "tag": "0010_diagnosis_summary",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1793555087194,
+      "tag": "0011_inbox_ignore_and_auto",
+      "breakpoints": true
     }
   ]
 }

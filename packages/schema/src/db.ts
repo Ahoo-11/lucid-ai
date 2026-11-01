@@ -22,6 +22,8 @@ export const projects = pgTable("projects", {
   name: text("name").notNull(),
   /** Redaction policy applied at ingest; null = store as received. */
   redaction: jsonb("redaction").$type<{ categories?: string[]; custom?: { name: string; pattern: string }[] } | null>(),
+  /** Whether the model diagnoses recurring Inbox problems by itself (within the daily cap). */
+  autoDiagnose: boolean("auto_diagnose").notNull().default(true),
   createdAt: createdAt(),
 });
 
@@ -148,6 +150,20 @@ export const issueExplanations = pgTable(
     inputTokens: integer("input_tokens"),
     outputTokens: integer("output_tokens"),
     latencyMs: integer("latency_ms"),
+    createdAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.projectId, t.issueId] })],
+);
+
+/**
+ * An Inbox problem its owner chose to ignore: it leaves the list and the
+ * badge, and is never diagnosed by itself. Bringing it back deletes the row.
+ */
+export const ignoredIssues = pgTable(
+  "ignored_issues",
+  {
+    projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+    issueId: text("issue_id").notNull(),
     createdAt: createdAt(),
   },
   (t) => [primaryKey({ columns: [t.projectId, t.issueId] })],

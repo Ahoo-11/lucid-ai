@@ -9,7 +9,7 @@ import { ensureDefaultProject } from "../src/keys";
 import { LiveHub } from "../src/live";
 
 type Diagnosis = { status: string; title?: string; summary?: string | null; fix?: string; model?: string; error?: string; auto?: boolean; inputTokens?: number; outputTokens?: number; latencyMs?: number };
-type Issue = { id: string; title: string; runs: number; toolName: string | null; diagnosis: Diagnosis | null };
+type Issue = { id: string; title: string; runs: number; toolName: string | null; diagnosis: Diagnosis | null; ignored: boolean };
 
 async function setup(chat: ChatClient | undefined) {
   const { db } = await openDb();
@@ -35,7 +35,7 @@ async function setup(chat: ChatClient | undefined) {
   // A recurring problem (two runs), and a one-off.
   await fail("Bash", "wc: command not found", ["p1", "p2"]);
   await fail("Read", "EACCES: permission denied", ["p3"]);
-  const issues = async () => (await (await app.request("/api/issues")).json()) as { issues: Issue[]; diagnosisModel: string | null };
+  const issues = async () => (await (await app.request("/api/issues")).json()) as { issues: Issue[]; diagnosisModel: string | null; autoDiagnose: boolean };
   const diagnose = (id: string) => post(`/api/issues/${id}/diagnose`, {});
   return { app, db, projectId, fail, issues, diagnose };
 }
@@ -151,6 +151,40 @@ describe("Inbox diagnoses by Muse Spark", () => {
     await diagnose(waiting.id);
     await until(async () => asked.length, (n) => n === 2);
     expect(asked).toHaveLength(2);
+  });
+
+  it("diagnoses nothing by itself with the switch off, or for an ignored problem", async () => {
+    let calls = 0;
+    const { app, fail, issues, diagnose } = await setup(async () => {
+      calls++;
+      return { text: '{"title": "A", "why": "B", "fix": "C"}', latencyMs: 5 };
+    });
+    const post = (path: string) => app.request(path, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+
+    // Off: nothing starts, the Diagnose button still works, and the setting sticks.
+    expect(await (await post("/api/settings/auto-diagnose/off")).json()).toEqual({ autoDiagnose: false });
+    const off = await issues();
+    expect(off).toMatchObject({ autoDiagnose: false });
+    const recurring = off.issues.find((i) => i.runs === 2)!;
+    expect(recurring.diagnosis).toBeNull();
+    await diagnose(recurring.id);
+    await until(async () => calls, (n) => n === 1);
+
+    // Ignored: out of the badge's count and never diagnosed by itself, even with the switch back on.
+    await fail("Grep", "regex parse error", ["p4", "p5"]);
+    const grep = (await issues()).issues.find((i) => i.toolName === "Grep")!;
+    expect((await post(`/api/issues/${grep.id}/ignore`)).status).toBe(200);
+    await post("/api/settings/auto-diagnose/on");
+    const on = await issues();
+    expect(on.autoDiagnose).toBe(true);
+    expect(on.issues.find((i) => i.id === grep.id)).toMatchObject({ ignored: true, diagnosis: null });
+    expect(calls).toBe(1);
+
+    // Restored, it's back and gets diagnosed.
+    await post(`/api/issues/${grep.id}/restore`);
+    expect((await issues()).issues.find((i) => i.id === grep.id)).toMatchObject({ ignored: false, diagnosis: { status: "pending" } });
+    await until(async () => calls, (n) => n === 2);
+    expect((await post("/api/issues/no-such-problem/ignore")).status).toBe(404);
   });
 
   it("refuses without a model key, for unknown problems, and for form posts", async () => {

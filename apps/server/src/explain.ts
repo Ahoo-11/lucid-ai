@@ -4,8 +4,9 @@
 // a fix the owner can apply.
 //
 // Recurring problems (two or more runs) are diagnosed by themselves when the
-// Inbox is opened, once each and at most AUTO_PER_DAY a day; anything else,
-// and running one again, waits for the Diagnose button. Each one's tokens and
+// Inbox is opened, once each and at most AUTO_PER_DAY a day, unless the owner
+// turned that off or ignored the problem; anything else, and running one
+// again, waits for the Diagnose button. Each one's tokens and
 // time are saved, to keep the cost measured. The rule-based text shows until a
 // diagnosis is ready, and when it fails.
 
@@ -199,9 +200,10 @@ export function createExplainer(ctx: AppContext) {
     /**
      * The diagnoses for these problems: saved ones, and ones still running.
      * Starts one for each recurring problem that never had one, while the
-     * account's daily cap lasts; a failed one isn't retried by itself.
+     * account's daily cap lasts; a failed one isn't retried by itself. None
+     * start with auto off, nor for problems the owner ignored.
      */
-    async diagnoses(projectId: string, issues: IssueForDiagnosis[]) {
+    async diagnoses(projectId: string, issues: IssueForDiagnosis[], { auto = true, ignored = new Set<string>() }: { auto?: boolean; ignored?: Set<string> } = {}) {
       const out = new Map<string, Diagnosis>();
       if (!issues.length) return out;
       const rows = await ctx.db
@@ -221,7 +223,7 @@ export function createExplainer(ctx: AppContext) {
           out.set(issue.id, { status: "ready", title: row.title, summary: row.summary, why: row.why, fix: row.fix, lesson: row.lesson, manual: row.manual, model: row.model, at, auto: row.auto, inputTokens: row.inputTokens, outputTokens: row.outputTokens, latencyMs: row.latencyMs });
         } else if (row?.status === "failed") {
           out.set(issue.id, { status: "failed", error: row.error ?? "Unknown error", model: row.model, at, auto: row.auto });
-        } else if (!row && issue.runs >= AUTO_MIN_RUNS) {
+        } else if (!row && auto && !ignored.has(issue.id) && issue.runs >= AUTO_MIN_RUNS) {
           never.push(issue);
         }
       }
