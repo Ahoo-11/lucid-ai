@@ -242,7 +242,11 @@ function ActiveLesson({ issue, lesson }: { issue: Issue; lesson: AppliedLesson }
     waiting: (
       <span className="text-zinc-500 dark:text-zinc-400">
         <Loader2 className="mr-1 inline size-3.5 animate-spin" />
-        Waiting for {agent} to pick it up. It needs Lucid's plugin 0.4: run the connect command again, then restart {agent}.
+        Waiting for {agent} to pick it up (within a minute). Lessons need Lucid plugin 0.4 or newer:{" "}
+        <Link to="/connect" className="font-medium text-zinc-700 underline underline-offset-2 dark:text-zinc-200">
+          check and update it
+        </Link>
+        .
       </span>
     ),
     live: (

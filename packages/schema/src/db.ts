@@ -174,6 +174,29 @@ export const lessons = pgTable(
   (t) => [index("lessons_project_harness").on(t.projectId, t.harness)],
 );
 
+/**
+ * A Lucid plugin installed in an agent on one machine (one per key), with the
+ * version it reports, so the dashboard can offer an Update like an app does.
+ */
+export const agentPlugins = pgTable(
+  "agent_plugins",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+    /** The key it sends with ("local" for a keyless local Lucid): one per machine. */
+    keyId: text("key_id").notNull(),
+    harness: text("harness").notNull(),
+    version: text("version").notNull(),
+    lastSeenAt: ts("last_seen_at").notNull().defaultNow(),
+    /** The owner pressed Update; the plugin gets the new files on its next check-in. */
+    updateRequestedAt: ts("update_requested_at"),
+    /** The version it downloaded and will run after the agent restarts. */
+    stagedVersion: text("staged_version"),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("agent_plugins_key").on(t.projectId, t.keyId, t.harness)],
+);
+
 /** Every payload exactly as received, so improved normalizers can reprocess history. */
 export const rawEvents = pgTable(
   "raw_events",

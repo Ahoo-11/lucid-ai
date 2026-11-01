@@ -15,8 +15,9 @@ import { and, eq, inArray } from "drizzle-orm";
 import { type Context, Hono } from "hono";
 import type { AppContext, AppEnv } from "../context";
 import { schema } from "../db";
-import { type Ingest, describeError, projectForKey } from "../ingestService";
-import { keyFromHeaders } from "../keys";
+import { type Ingest, describeError } from "../ingestService";
+import { keyFromHeaders, verifyApiKey } from "../keys";
+import { pluginTracker, updateOffer } from "../plugins";
 import { batchFor } from "../normalizers";
 import { decodeLogs, decodeTraces } from "../otlpProto";
 import { LESSON_HARNESSES, deliverLessons } from "../lessons";
@@ -63,10 +64,24 @@ export function ingestRoutes(ctx: AppContext, ingest: Ingest) {
 
   // Only ingest paths need a key: everything else under "/" is the dashboard.
   const authenticate = async (c: Context<AppEnv>) => {
-    const projectId = await projectForKey(ctx, keyFromHeaders(c.req.raw.headers));
-    if (projectId) c.set("projectId", projectId);
-    return projectId;
+    const key = keyFromHeaders(c.req.raw.headers);
+    if (!key && ctx.localMode) {
+      c.set("projectId", ctx.defaultProjectId);
+      c.set("keyId", "local");
+      return ctx.defaultProjectId;
+    }
+    const row = await verifyApiKey(ctx.db, key);
+    if (!row) return null;
+    c.set("projectId", row.projectId);
+    c.set("keyId", row.id);
+    return row.projectId;
   };
+  const notePlugin = pluginTracker(ctx.db);
+  // Which plugin version sent this (from its User-Agent), for the dashboard's Update button.
+  const noteFrom = (c: Context<AppEnv>, harness: string) =>
+    notePlugin({ projectId: c.get("projectId"), keyId: c.get("keyId") ?? "local", harness, userAgent: c.req.header("user-agent"), staged: c.req.header("x-lucid-plugin-staged") }).catch((error) =>
+      ctx.log.warn(`[plugins] couldn't record a plugin version: ${(error as Error).message}`),
+    );
 
   app.use("/v1/*", async (c, next) => {
     if (!(await authenticate(c))) return c.json({ error: UNAUTHORIZED }, 401);
@@ -112,10 +127,14 @@ export function ingestRoutes(ctx: AppContext, ingest: Ingest) {
   });
 
   // The lessons the owner approved for this agent, which its plugin adds to every turn.
+  // Also the plugin's check-in: an Update the owner asked for rides along here.
   app.get("/v1/lessons", async (c) => {
     const harness = c.req.query("harness") ?? "";
     if (!LESSON_HARNESSES.has(harness)) return c.json({ lessons: [] });
-    return c.json({ lessons: await deliverLessons(ctx.db, c.get("projectId"), harness) });
+    await noteFrom(c, harness);
+    const projectId = c.get("projectId");
+    const update = await updateOffer(ctx.db, { projectId, keyId: c.get("keyId") ?? "local", harness, userAgent: c.req.header("user-agent") });
+    return c.json({ lessons: await deliverLessons(ctx.db, projectId, harness), ...(update ? { update } : {}) });
   });
 
   // Progress of an upload of past runs: { id, harness, total, done, finished? }.
@@ -127,6 +146,7 @@ export function ingestRoutes(ctx: AppContext, ingest: Ingest) {
   app.post("/v1/hooks/:harness", async (c) => {
     const projectId = c.get("projectId");
     const harness = c.req.param("harness");
+    void noteFrom(c, harness);
     const payload = JSON.parse((await readBody(c)).toString("utf8") || "{}");
     const { rawId, payload: clean } = await store(projectId, "hook", harness, payload);
     const batch = batchFor("hook", harness, clean);

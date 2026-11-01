@@ -64,6 +64,13 @@
       "when": 1793460331340,
       "tag": "0008_lessons",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1793513107941,
+      "tag": "0009_agent_plugins",
+      "breakpoints": true
     }
   ]
 }

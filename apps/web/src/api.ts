@@ -149,6 +149,22 @@ export type ConnectStatus = {
 
 export type ApiKey = { id: string; name: string; prefix: string; createdAt: string; lastUsedAt: string | null };
 
+/**
+ * A Lucid plugin in an agent on one machine. current: up to date; outdated: Update
+ * available; updating: asked, not picked up yet; restart: downloaded, the agent
+ * runs it after a restart; manual: too old to update itself, one update by hand.
+ */
+export type AgentPlugin = {
+  id: string;
+  harness: string;
+  machine: string;
+  version: string;
+  latest: string;
+  stagedVersion: string | null;
+  state: "current" | "outdated" | "manual" | "updating" | "restart";
+  lastSeenAt: string;
+};
+
 /** An upload of past runs (Hermes backfill, `lucid import`): going, or just finished. */
 export type HistorySync = { id: string; harness: string; total: number; done: number; finished: boolean; startedAt: string };
 
@@ -271,6 +287,9 @@ export const api = {
       request<{ ok: true }>(`/links/${encodeURIComponent(code)}/${decision}`, { method: "POST", body: JSON.stringify({ historyDays }) }),
   },
   syncs: () => request<{ syncs: HistorySync[] }>("/syncs"),
+  plugins: () => request<{ plugins: AgentPlugin[] }>("/plugins"),
+  /** The plugin downloads the new version on its next check-in; the agent runs it after a restart. */
+  updatePlugin: (id: string) => request<{ plugin: AgentPlugin }>(`/plugins/${encodeURIComponent(id)}/update`, { method: "POST", body: "{}" }),
   arena: {
     models: () => request<{ configured: boolean; models: ArenaModel[]; suggestedJudge: string | null; provider?: string }>("/arena/models"),
     check: (stepId: string) => request<{ ok: true; messages: number; tools: number } | { ok: false; reason: string }>(`/arena/check?step=${stepId}`),

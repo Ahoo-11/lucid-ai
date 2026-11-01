@@ -28,4 +28,5 @@ export type AppContext = {
   ai?: AiInfo;
 };
 
-export type AppEnv = { Variables: { projectId: string } };
+/** keyId: the key an ingest request came with ("local" without one), which tells machines apart. */
+export type AppEnv = { Variables: { projectId: string; keyId?: string } };

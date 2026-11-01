@@ -15,6 +15,7 @@ import { publicEndpoint } from "../install";
 import { createApiKey } from "../keys";
 import { batchFor } from "../normalizers";
 import { upstreams } from "../proxy";
+import { listPlugins, requestUpdate } from "../plugins";
 import { currentSyncs } from "../syncs";
 import { writeBatch } from "../writer";
 
@@ -328,6 +329,17 @@ export function apiRoutes(ctx: AppContext) {
   });
 
   app.get("/syncs", async (c) => c.json({ syncs: await currentSyncs(db, c.get("projectId")) }));
+
+  // Lucid plugins in the project's agents, and the Update button.
+  app.get("/plugins", async (c) => c.json({ plugins: await listPlugins(db, c.get("projectId")) }));
+
+  app.post("/plugins/:id/update", async (c) => {
+    if (!(c.req.header("content-type") ?? "").includes("application/json")) return c.json({ error: "Send JSON" }, 415);
+    const projectId = c.get("projectId");
+    const row = await requestUpdate(db, projectId, c.req.param("id"));
+    if (!row) return c.json({ error: "No such plugin" }, 404);
+    return c.json({ plugin: (await listPlugins(db, projectId)).find((plugin) => plugin.id === row.id) });
+  });
 
   app.get("/connect/status", async (c) => {
     const projectId = c.get("projectId");

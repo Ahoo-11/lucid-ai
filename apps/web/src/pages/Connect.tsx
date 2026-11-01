@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, ArrowRight, KeyRound, Plus, Waypoints } from "lucide-react";
+import { Activity, ArrowRight, Check, Copy, KeyRound, Loader2, Plus, Waypoints } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import { type ConnectStatus, api } from "../api";
@@ -164,6 +164,92 @@ function rows(sources: ConnectStatus["sources"]): Row[] {
 
 const RECENT_MS = 15 * 60_000;
 
+/** What to send a Hermes whose plugin is too old to update itself (once; later ones use Update). */
+const manualUpdate = (endpoint: string) => `Update your Lucid plugin. Run this with your terminal tool, then tell me what it printed:
+curl -fsSL ${endpoint}/install/hermes.sh | sh`;
+
+/** The Lucid plugin on each machine running this agent, with an app-style Update. */
+function PluginLines({ harness, endpoint }: { harness: string; endpoint: string }) {
+  const queryClient = useQueryClient();
+  const plugins = useQuery({
+    queryKey: ["plugins"],
+    queryFn: api.plugins,
+    // While an update is on its way, watch for the plugin picking it up.
+    refetchInterval: (q) => (q.state.data?.plugins.some((p) => p.state === "updating" || p.state === "restart") ? 5_000 : 60_000),
+  });
+  const update = useMutation({
+    mutationFn: api.updatePlugin,
+    onSettled: () => void queryClient.invalidateQueries({ queryKey: ["plugins"] }),
+  });
+  const [copied, setCopied] = useState<string | null>(null);
+  const mine = (plugins.data?.plugins ?? []).filter((p) => p.harness === harness);
+  if (!mine.length) return null;
+  const agent = harnessLabel(harness);
+  return (
+    <ul className="mt-2 space-y-1.5">
+      {mine.map((plugin) => {
+        const where = mine.length > 1 ? ` on ${plugin.machine}` : "";
+        return (
+          <li key={plugin.id} className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-500 dark:text-zinc-400">
+            {plugin.state === "current" && (
+              <span>
+                Lucid plugin {plugin.version}
+                {where} · up to date
+              </span>
+            )}
+            {plugin.state === "outdated" && (
+              <>
+                <span>
+                  Lucid plugin {plugin.version}
+                  {where} · {plugin.latest} is available
+                </span>
+                <button
+                  type="button"
+                  onClick={() => update.mutate(plugin.id)}
+                  disabled={update.isPending}
+                  className="inline-flex items-center gap-1 rounded-full bg-brand-300 px-2.5 py-0.5 font-semibold text-zinc-950 transition hover:bg-brand-200 disabled:opacity-50"
+                >
+                  {update.isPending && update.variables === plugin.id && <Loader2 className="size-3 animate-spin" />}
+                  Update
+                </button>
+              </>
+            )}
+            {plugin.state === "updating" && (
+              <span className="inline-flex items-center gap-1">
+                <Loader2 className="size-3 animate-spin" />
+                Updating to {plugin.latest}
+                {where}. {agent} picks it up within a minute.
+              </span>
+            )}
+            {plugin.state === "restart" && (
+              <span className="font-medium text-brand-700 dark:text-brand-300">
+                Updated to {plugin.stagedVersion}
+                {where}. Send <code className="font-mono">/restart</code> to {agent} to finish.
+              </span>
+            )}
+            {plugin.state === "manual" && (
+              <>
+                <span className="text-amber-700 dark:text-amber-400">
+                  Lucid plugin {plugin.version}
+                  {where} is too old to update itself. Send {agent} this message once, then <code className="font-mono">/restart</code>:
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void navigator.clipboard.writeText(manualUpdate(endpoint)).then(() => setCopied(plugin.id))}
+                  className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 font-medium text-zinc-700 ring-1 ring-zinc-300 transition hover:bg-zinc-50 dark:text-zinc-200 dark:ring-white/15 dark:hover:bg-white/5"
+                >
+                  {copied === plugin.id ? <Check className="size-3" /> : <Copy className="size-3" />}
+                  {copied === plugin.id ? "Copied" : "Copy message"}
+                </button>
+              </>
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 function Connected({ data }: { data: ConnectStatus }) {
   return (
     <Card className="overflow-hidden">
@@ -180,6 +266,7 @@ function Connected({ data }: { data: ConnectStatus }) {
                   {plural(row.events, "event")} via {row.via.join(" and ")}
                 </div>
                 <AgentSync harness={row.id} />
+                <PluginLines harness={row.id} endpoint={data.endpoint} />
               </div>
               <div className="flex shrink-0 items-center gap-2 text-sm text-zinc-500 dark:text-zinc-400" title={row.lastAt ?? undefined}>
                 <span className={cx("size-2 rounded-full", recent ? "bg-emerald-500" : "bg-zinc-300 dark:bg-zinc-600")} />

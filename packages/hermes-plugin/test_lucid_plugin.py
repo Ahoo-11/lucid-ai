@@ -18,14 +18,18 @@ RECEIVED: list[dict] = []
 ANSWER = {"status": 200}
 LESSONS: dict = {"lessons": []}
 FETCHES: list[dict] = []
+# Files the fake Lucid serves under /install/hermes/lucid/, for updates.
+FILES: dict[str, bytes] = {}
 
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802
-        FETCHES.append({"path": self.path, "key": self.headers.get("x-api-key")})
-        body = json.dumps(LESSONS).encode("utf-8")
+        if self.path in FILES:
+            body = FILES[self.path]
+        else:
+            FETCHES.append({"path": self.path, "key": self.headers.get("x-api-key"), "staged": self.headers.get("x-lucid-plugin-staged")})
+            body = json.dumps(LESSONS).encode("utf-8")
         self.send_response(200)
-        self.send_header("Content-Type", "application/json")
         self.end_headers()
         self.wfile.write(body)
 
@@ -84,6 +88,8 @@ class PluginTest(unittest.TestCase):
     def setUp(self):
         RECEIVED.clear()
         FETCHES.clear()
+        FILES.clear()
+        LESSONS.clear()
         LESSONS["lessons"] = []
         ANSWER["status"] = 200
         os.environ.pop("LUCID_BACKFILL_DAYS", None)
@@ -348,7 +354,7 @@ class PluginTest(unittest.TestCase):
             return hook(**turn) == expected
 
         self.assertTrue(self.wait_for(refreshed))
-        self.assertEqual(FETCHES[-1], {"path": "/v1/lessons?harness=hermes", "key": "lucid_live_test"})
+        self.assertEqual(FETCHES[-1], {"path": "/v1/lessons?harness=hermes", "key": "lucid_live_test", "staged": None})
         # Only pre_llm_call's answer is used by Hermes; the others stay observers.
         self.assertIsNone(self.ctx.hooks["post_llm_call"](session_id="s1", turn_id="s1:task:1", assistant_response="ok"))
         # The turn is still observed as before.
@@ -365,6 +371,51 @@ class PluginTest(unittest.TestCase):
         LESSONS["lessons"] = []
         self.plugin._lessons.refresh()
         self.assertIsNone(hook(**turn))
+
+    def test_version_matches_its_manifest(self):
+        manifest = (Path(__file__).parent / "lucid" / "plugin.yaml").read_text(encoding="utf-8")
+        self.assertIn(f'version: "{self.plugin.VERSION}"', manifest)
+
+    def copy_of_plugin(self):
+        """The plugin loaded from a scratch folder, so an update can't touch the real files."""
+        folder = self.home / "plugins" / "lucid"
+        shutil.copytree(Path(__file__).parent / "lucid", folder, ignore=shutil.ignore_patterns("__pycache__"))
+        spec = importlib.util.spec_from_file_location("lucid_plugin_copy", folder / "__init__.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module, folder
+
+    def offer(self, version, init_py, yaml):
+        FILES["/install/hermes/lucid/__init__.py"] = init_py.encode("utf-8")
+        FILES["/install/hermes/lucid/plugin.yaml"] = yaml.encode("utf-8")
+        LESSONS["update"] = {"version": version, "files": {name: f"/install/hermes/lucid/{name}" for name in ("__init__.py", "plugin.yaml")}}
+
+    def test_updates_itself_when_the_owner_asks(self):
+        plugin, folder = self.copy_of_plugin()
+        self.offer("0.6.0", 'VERSION = "0.6.0"\n', 'name: lucid\nversion: "0.6.0"\n')
+        plugin._lessons.refresh()
+        self.assertEqual((folder / "__init__.py").read_text(encoding="utf-8"), 'VERSION = "0.6.0"\n')
+        self.assertIn('version: "0.6.0"', (folder / "plugin.yaml").read_text(encoding="utf-8"))
+        self.assertEqual(plugin._lessons.staged, "0.6.0")
+        self.assertEqual(sorted(p.name for p in folder.iterdir() if p.name.endswith(".part")), [])
+        # Lucid hears it's waiting for a restart; the same offer isn't downloaded twice.
+        FILES.clear()
+        plugin._lessons.refresh()
+        self.assertEqual(FETCHES[-1]["staged"], "0.6.0")
+
+    def test_refuses_updates_that_arent_its_own_files_or_arent_whole(self):
+        plugin, folder = self.copy_of_plugin()
+        original = (folder / "__init__.py").read_bytes()
+        # From anywhere but the Lucid it reports to.
+        LESSONS["update"] = {"version": "0.6.0", "files": {"__init__.py": "http://elsewhere.example/x.py", "plugin.yaml": "/install/hermes/lucid/plugin.yaml"}}
+        plugin._lessons.refresh()
+        # Broken code, or not the version promised.
+        self.offer("0.6.0", "def broken(:\n", 'version: "0.6.0"\n')
+        plugin._lessons.refresh()
+        self.offer("0.6.0", 'VERSION = "0.6.0"\n', 'version: "0.5.9"\n')
+        plugin._lessons.refresh()
+        self.assertEqual((folder / "__init__.py").read_bytes(), original)
+        self.assertIsNone(plugin._lessons.staged)
 
     def test_backfill_starts_from_register_when_asked(self):
         self.make_state_db(time.time())

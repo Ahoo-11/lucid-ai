@@ -30,6 +30,7 @@ import json
 import logging
 import os
 import queue
+import re
 import sqlite3
 import sys
 import threading
@@ -88,6 +89,12 @@ LESSONS_REFRESH_SECONDS = 60.0
 LESSONS_TIMEOUT = 5.0
 # Lucid caps a lesson at 400 characters and sends at most 10; this is a backstop.
 LESSONS_MAX_CHARS = 4_000
+# Keep in step with plugin.yaml: Lucid reads it from here to offer updates.
+VERSION = "0.5.0"
+USER_AGENT = f"lucid-hermes-plugin/{VERSION}"
+# What this plugin is made of: all an update ever replaces.
+PLUGIN_FILES = ("__init__.py", "plugin.yaml")
+UPDATE_TIMEOUT = 30.0
 # Same lists as `lucid import hermes`; older Hermes versions lack some columns.
 SESSION_COLUMNS = [
     "id", "source", "model", "system_prompt_hash", "parent_session_id", "started_at", "ended_at", "end_reason", "title",
@@ -118,7 +125,7 @@ def _spool_dir() -> Path:
 def _post_json(path: str, body: dict[str, Any], timeout: float) -> bool:
     """POST to Lucid, gzipped when large. True on a 2xx answer."""
     endpoint, key = _config()
-    headers = {"Content-Type": "application/json", "User-Agent": "lucid-hermes-plugin/0.4"}
+    headers = {"Content-Type": "application/json", "User-Agent": USER_AGENT}
     if key:
         headers["x-api-key"] = key
     data = json.dumps(body, separators=(",", ":"), default=str).encode("utf-8")
@@ -498,6 +505,8 @@ class _Lessons:
         self.block = ""
         self.lock = threading.Lock()
         self.started = False
+        # A newer version of this plugin, downloaded and waiting for Hermes to restart.
+        self.staged: Optional[str] = None
 
     def context(self) -> Optional[dict[str, str]]:
         with self.lock:
@@ -505,18 +514,56 @@ class _Lessons:
 
     def refresh(self) -> None:
         endpoint, key = _config()
-        headers = {"User-Agent": "lucid-hermes-plugin/0.4"}
+        headers = {"User-Agent": USER_AGENT}
         if key:
             headers["x-api-key"] = key
+        if self.staged:
+            headers["x-lucid-plugin-staged"] = self.staged
         request = urllib.request.Request(f"{endpoint}/v1/lessons?harness=hermes", headers=headers)
         with urllib.request.urlopen(request, timeout=LESSONS_TIMEOUT) as response:
-            lessons = json.loads(response.read().decode("utf-8")).get("lessons") or []
+            answer = json.loads(response.read().decode("utf-8"))
+        lessons = answer.get("lessons") or []
         lines = [f"- {str(lesson.get('text', '')).strip()}" for lesson in lessons if str(lesson.get("text", "")).strip()]
         block = ""
         if lines:
             block = "Lessons from your owner, via Lucid (follow them):\n" + "\n".join(lines)
         with self.lock:
             self.block = block[:LESSONS_MAX_CHARS]
+        if answer.get("update"):
+            try:
+                self.apply_update(answer["update"], endpoint, headers)
+            except Exception:  # a failed update leaves the plugin as it was; Lucid offers it again
+                log.warning("Lucid plugin update failed", exc_info=True)
+
+    def apply_update(self, update: Any, endpoint: str, headers: dict[str, str]) -> None:
+        """Replaces this plugin's own files with the version the owner asked for
+        with Lucid's Update button: only these files, only from the Lucid this
+        plugin reports to, never a command. Hermes runs them after its next
+        restart, which the owner chooses."""
+        if not isinstance(update, dict):
+            return
+        version = str(update.get("version") or "")
+        files = update.get("files")
+        if not re.fullmatch(r"\d+(\.\d+){1,2}", version) or version == self.staged or not isinstance(files, dict):
+            return
+        if set(files) != set(PLUGIN_FILES) or any(files[name] != f"/install/hermes/lucid/{name}" for name in PLUGIN_FILES):
+            return
+        downloaded: dict[str, bytes] = {}
+        for name in PLUGIN_FILES:
+            request = urllib.request.Request(f"{endpoint}{files[name]}", headers=headers)
+            with urllib.request.urlopen(request, timeout=UPDATE_TIMEOUT) as response:
+                downloaded[name] = response.read()
+        # Whole and as offered, before anything is replaced: valid Python, the promised version.
+        compile(downloaded["__init__.py"], "lucid/__init__.py", "exec")
+        if f'version: "{version}"' not in downloaded["plugin.yaml"].decode("utf-8"):
+            return
+        here = Path(__file__).resolve().parent
+        for name, data in downloaded.items():
+            part = here / f"{name}.part"
+            part.write_bytes(data)
+            os.replace(part, here / name)
+        self.staged = version
+        log.info("Lucid plugin %s downloaded; it runs after Hermes restarts", version)
 
     def _loop(self) -> None:
         while True:
