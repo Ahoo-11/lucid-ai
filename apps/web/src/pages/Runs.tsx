@@ -4,7 +4,9 @@ import { Link, useSearchParams } from "react-router";
 import { type RunListItem, api } from "../api";
 import { ago, cost, duration, harnessLabel, plural } from "../format";
 import { SyncBanner } from "../syncs";
+import { InOut } from "../tokens";
 import { Card, Empty, RunDot, Stat, cx } from "../ui";
+import { Spend } from "./Spend";
 
 const STATUS_FILTERS = [
   { value: "", label: "All" },
@@ -12,8 +14,70 @@ const STATUS_FILTERS = [
   { value: "running", label: "Running" },
 ];
 
+/** The run list, or what the runs cost (?view=spend). Every filter lives in the URL, so a view can be shared or bookmarked. */
 export function Runs() {
-  // Every filter lives in the URL, so a filtered view can be shared or bookmarked.
+  const [params, setParams] = useSearchParams();
+  const overview = useQuery({ queryKey: ["overview"], queryFn: api.overview });
+  const day = overview.data?.last24h;
+  const spend = params.get("view") === "spend";
+  const showSpend = (on: boolean) => {
+    // Each view keeps only its own settings in the URL.
+    const next = new URLSearchParams();
+    if (on) next.set("view", "spend");
+    setParams(next, { replace: true });
+  };
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h1 className="text-xl font-semibold">Runs</h1>
+          <p className="text-sm text-zinc-500 dark:text-zinc-400">
+            {spend ? "What your agents' model calls cost, and where the tokens go." : "Every request your agents handled, newest first."}
+          </p>
+        </div>
+        {!spend && (
+          <Card className="grid grid-cols-2 gap-x-8 gap-y-3 px-5 py-3 sm:grid-cols-4">
+            <Stat label="Runs today" value={day?.runs ?? "—"} hint="Runs that started in the last 24 hours" />
+            <Stat label="With errors" value={day?.errors ?? "—"} hint="Runs in the last 24 hours that failed or had a failed step" tone={day?.errors ? "bad" : undefined} />
+            <Stat label="Spend today" value={cost(day?.costUsd)} hint="Model cost of the last 24 hours. Claude Code's reported cost when available, otherwise list prices × tokens" />
+            <Stat label="Avg duration" value={duration(day?.avgDurationMs)} hint="Average time from the request to the agent's last step" />
+          </Card>
+        )}
+      </div>
+
+      <div role="tablist" className="flex gap-5 border-b border-zinc-200 text-sm dark:border-zinc-800">
+        <ViewTab current={!spend} onClick={() => showSpend(false)}>
+          All runs
+        </ViewTab>
+        <ViewTab current={spend} onClick={() => showSpend(true)}>
+          Spend and tokens
+        </ViewTab>
+      </div>
+
+      {spend ? <Spend /> : <RunList />}
+    </div>
+  );
+}
+
+function ViewTab({ current, onClick, children }: { current: boolean; onClick: () => void; children: string }) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={current}
+      onClick={onClick}
+      className={cx(
+        "-mb-px border-b-2 pb-2.5 font-medium transition-colors",
+        current ? "border-zinc-900 text-zinc-900 dark:border-zinc-100 dark:text-zinc-100" : "border-transparent text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200",
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+function RunList() {
   const [params, setParams] = useSearchParams();
   const status = params.get("status") ?? "";
   const harness = params.get("harness") ?? "";
@@ -24,7 +88,6 @@ export function Runs() {
     else next.delete(key);
     setParams(next, { replace: true });
   };
-
   const overview = useQuery({ queryKey: ["overview"], queryFn: api.overview });
   const runs = useInfiniteQuery({
     queryKey: ["runs", status, harness, q],
@@ -40,23 +103,9 @@ export function Runs() {
     getNextPageParam: (last) => last.nextBefore ?? undefined,
   });
   const rows = runs.data?.pages.flatMap((page) => page.runs) ?? [];
-  const day = overview.data?.last24h;
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-semibold">Runs</h1>
-          <p className="text-sm text-zinc-500 dark:text-zinc-400">Every request your agents handled, newest first.</p>
-        </div>
-        <Card className="grid grid-cols-2 gap-x-8 gap-y-3 px-5 py-3 sm:grid-cols-4">
-          <Stat label="Runs today" value={day?.runs ?? "—"} hint="Runs that started in the last 24 hours" />
-          <Stat label="With errors" value={day?.errors ?? "—"} hint="Runs in the last 24 hours that failed or had a failed step" tone={day?.errors ? "bad" : undefined} />
-          <Stat label="Spend today" value={cost(day?.costUsd)} hint="Model cost of the last 24 hours. Claude Code's reported cost when available, otherwise list prices × tokens" />
-          <Stat label="Avg duration" value={duration(day?.avgDurationMs)} hint="Average time from the request to the agent's last step" />
-        </Card>
-      </div>
-
       <SyncBanner />
 
       <div className="flex flex-wrap items-center gap-2">
@@ -136,6 +185,7 @@ function RunRow({ run }: { run: RunListItem }) {
     run.model,
     run.llmCallCount ? plural(run.llmCallCount, "model call") : null,
     run.toolCallCount ? plural(run.toolCallCount, "tool call") : null,
+    run.durationMs != null ? duration(run.durationMs) : null,
   ].filter(Boolean);
   return (
     <li>
@@ -156,7 +206,7 @@ function RunRow({ run }: { run: RunListItem }) {
             {cost(run.costUsd)}
             {run.costIncomplete > 0 && <span title="Some model calls have no known price, so this is a minimum">+</span>}
           </div>
-          <div title="Duration">{duration(run.durationMs)}</div>
+          {run.llmCallCount > 0 && <InOut t={run} />}
         </div>
         <div className="w-20 shrink-0 text-right text-xs text-zinc-400" title={run.startedAt ?? undefined}>
           {ago(run.startedAt)}

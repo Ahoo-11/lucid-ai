@@ -12,6 +12,15 @@ import { writeBatch } from "./writer";
 const { projects, rawEvents } = schema;
 
 /**
+ * What every project scrubs unless it chose otherwise: secrets only (keys,
+ * tokens, passwords, private keys), so an agent that prints a .env never puts
+ * it in Lucid, a diagnosis or an Arena replay. Personal data (emails, phones,
+ * IPs, cards) stays readable for debugging; a project's own policy can add
+ * it, and `{ categories: [] }` turns redaction off.
+ */
+export const DEFAULT_REDACTION: RedactionPolicy = { categories: ["private_key", "jwt", "api_key", "secret_assignment"] };
+
+/**
  * Postgres text and jsonb cannot hold NUL characters, and real transcripts
  * contain them (binary tool output). Replace them before anything is stored.
  */
@@ -44,20 +53,20 @@ export async function projectForKey(ctx: AppContext, key: string | undefined) {
 export type Ingest = ReturnType<typeof createIngest>;
 
 export function createIngest(ctx: AppContext) {
-  const policyCache = new Map<string, { policy: RedactionPolicy | null; at: number }>();
+  const policyCache = new Map<string, { policy: RedactionPolicy; at: number }>();
 
   const redactionPolicy = async (projectId: string) => {
     const cached = policyCache.get(projectId);
     if (cached && Date.now() - cached.at < 30_000) return cached.policy;
     const [row] = await ctx.db.select({ redaction: projects.redaction }).from(projects).where(eq(projects.id, projectId));
-    const policy = (row?.redaction ?? null) as RedactionPolicy | null;
+    const policy = (row?.redaction as RedactionPolicy | null | undefined) ?? DEFAULT_REDACTION;
     policyCache.set(projectId, { policy, at: Date.now() });
     return policy;
   };
 
+  // Before anything is stored: the raw copy, the runs made from it, and all that reads them.
   const store = async (projectId: string, source: string, harness: string | null, payload: unknown) => {
-    const policy = await redactionPolicy(projectId);
-    const clean = stripNul(policy ? new Redactor(policy).value(payload) : payload);
+    const clean = stripNul(new Redactor(await redactionPolicy(projectId)).value(payload));
     const [row] = await ctx.db.insert(rawEvents).values({ projectId, source, harness, payload: clean as object }).returning({ id: rawEvents.id });
     return { rawId: row!.id, payload: clean };
   };

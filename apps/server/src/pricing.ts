@@ -33,6 +33,30 @@ export function priceStep(step: {
   return { costUsd: cost, costSource: pricing.source };
 }
 
+export type CostSplit = { input: number; cacheRead: number; cacheWrite: number; output: number };
+
+/**
+ * What each kind of token cost at list prices: new input, reading and writing
+ * the prompt cache, and output. An estimate (a harness may report its own
+ * total); null when none of these models has a known price.
+ */
+export function costSplit(
+  rows: Iterable<{ model: string | null; provider: string | null; inputTokens: number | null; outputTokens: number | null; cacheReadTokens: number | null; cacheWriteTokens: number | null }>,
+): CostSplit | null {
+  const split: CostSplit = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
+  let priced = false;
+  for (const row of rows) {
+    const rates = resolveModelPricing({ provider: row.provider, model: row.model, catalog });
+    if (rates.source === "unavailable") continue;
+    priced = true;
+    split.input += ((row.inputTokens ?? 0) * rates.inputPerMillion) / 1e6;
+    split.cacheRead += ((row.cacheReadTokens ?? 0) * (rates.cacheReadPerMillion ?? rates.inputPerMillion)) / 1e6;
+    split.cacheWrite += ((row.cacheWriteTokens ?? 0) * (rates.cacheWritePerMillion ?? rates.inputPerMillion)) / 1e6;
+    split.output += ((row.outputTokens ?? 0) * rates.outputPerMillion) / 1e6;
+  }
+  return priced ? split : null;
+}
+
 /** Prices LLM steps written before the catalog loaded (or for models it lacked). */
 export async function repriceUnpriced(db: Db) {
   const rows = await db

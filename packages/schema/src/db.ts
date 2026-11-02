@@ -20,7 +20,7 @@ const createdAt = () => ts("created_at").notNull().defaultNow();
 export const projects = pgTable("projects", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
-  /** Redaction policy applied at ingest; null = store as received. */
+  /** Redaction policy applied at ingest; null = the default (secrets only, see DEFAULT_REDACTION). */
   redaction: jsonb("redaction").$type<{ categories?: string[]; custom?: { name: string; pattern: string }[] } | null>(),
   /** Whether the model diagnoses recurring Inbox problems by itself (within the daily cap). */
   autoDiagnose: boolean("auto_diagnose").notNull().default(true),

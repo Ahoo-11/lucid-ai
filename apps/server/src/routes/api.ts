@@ -1,7 +1,7 @@
 // Dashboard API. Shapes are made for the screens, not generic: the Runs list
 // gets exactly the columns it shows, the Run page gets the run and its steps.
 
-import { and, asc, count, desc, eq, gte, ilike, isNull, lt, max, or, sql, sum } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, ilike, isNotNull, isNull, lt, max, or, sql, sum } from "drizzle-orm";
 import { Hono, type MiddlewareHandler } from "hono";
 import { streamSSE } from "hono/streaming";
 import type { AppContext, AppEnv } from "../context";
@@ -12,6 +12,7 @@ import { createExplainer } from "../explain";
 import { errorSignature, hintFor } from "../insights";
 import { LESSON_HARNESSES, applyLesson, cleanLesson, lessonsForIssues, runsSince, setLessonStatus } from "../lessons";
 import { publicEndpoint } from "../install";
+import { costSplit } from "../pricing";
 import { createApiKey } from "../keys";
 import { batchFor } from "../normalizers";
 import { upstreams } from "../proxy";
@@ -21,6 +22,8 @@ import { writeBatch } from "../writer";
 
 const { apiKeys, blobs, ignoredIssues, projects, rawEvents, runs, sessions, steps } = schema;
 const STATUSES = new Set(["ok", "error", "running"]);
+/** The Spend view's periods, in days. */
+const USAGE_DAYS = new Set([1, 7, 30]);
 
 const runListColumns = {
   id: runs.id,
@@ -109,6 +112,80 @@ export function apiRoutes(ctx: AppContext) {
     return c.json({ last24h: totals, harnesses, topTools });
   });
 
+  /** Spend and tokens over the last 1, 7 or 30 days: totals, by hour, by agent, by model, and the costliest runs. */
+  app.get("/usage", async (c) => {
+    const projectId = c.get("projectId");
+    const asked = Number(c.req.query("days"));
+    const days = USAGE_DAYS.has(asked) ? asked : 7;
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    const inPeriod = and(eq(runs.projectId, projectId), gte(runs.startedAt, since));
+    const sums = {
+      runs: count(),
+      costUsd: sum(runs.costUsd).mapWith(Number),
+      inputTokens: sum(runs.inputTokens).mapWith(Number),
+      outputTokens: sum(runs.outputTokens).mapWith(Number),
+      cacheReadTokens: sum(runs.cacheReadTokens).mapWith(Number),
+      cacheWriteTokens: sum(runs.cacheWriteTokens).mapWith(Number),
+      reasoningTokens: sum(runs.reasoningTokens).mapWith(Number),
+      llmCalls: sum(runs.llmCallCount).mapWith(Number),
+    };
+    const [totals] = await db
+      .select({ ...sums, unpricedRuns: sql<number>`(count(*) filter (where ${runs.costIncomplete} > 0))::int` })
+      .from(runs)
+      .where(inPeriod);
+    // UTC hours: the browser groups them into the viewer's own days.
+    const hour = sql<string>`to_char(date_trunc('hour', ${runs.startedAt} at time zone 'UTC'), 'YYYY-MM-DD"T"HH24":00:00Z"')`;
+    const hours = await db.select({ at: hour, ...sums }).from(runs).where(inPeriod).groupBy(hour).orderBy(hour);
+    const agents = await db
+      .select({ harness: runs.harness, ...sums })
+      .from(runs)
+      .where(inPeriod)
+      .groupBy(runs.harness)
+      .orderBy(sql`sum(${runs.costUsd}) desc nulls last`);
+    const modelRows = await db
+      .select({
+        model: steps.model,
+        provider: steps.provider,
+        calls: count(),
+        costUsd: sum(steps.costUsd).mapWith(Number),
+        inputTokens: sum(steps.inputTokens).mapWith(Number),
+        outputTokens: sum(steps.outputTokens).mapWith(Number),
+        cacheReadTokens: sum(steps.cacheReadTokens).mapWith(Number),
+        cacheWriteTokens: sum(steps.cacheWriteTokens).mapWith(Number),
+        unpriced: sql<number>`(count(*) filter (where ${steps.costUsd} is null))::int`,
+      })
+      .from(steps)
+      .where(and(eq(steps.projectId, projectId), eq(steps.kind, "llm"), gte(steps.startedAt, since)))
+      .groupBy(steps.model, steps.provider)
+      .orderBy(sql`sum(${steps.costUsd}) desc nulls last`);
+    const top = await db
+      .select({
+        id: runs.id,
+        name: runs.name,
+        harness: runs.harness,
+        model: runs.model,
+        startedAt: runs.startedAt,
+        costUsd: runs.costUsd,
+        inputTokens: runs.inputTokens,
+        outputTokens: runs.outputTokens,
+        cacheReadTokens: runs.cacheReadTokens,
+        cacheWriteTokens: runs.cacheWriteTokens,
+      })
+      .from(runs)
+      .where(and(inPeriod, isNotNull(runs.costUsd)))
+      .orderBy(desc(runs.costUsd))
+      .limit(5);
+    return c.json({
+      days,
+      since: since.toISOString(),
+      totals: { ...totals, split: costSplit(modelRows) },
+      hours,
+      agents,
+      models: modelRows.map((row) => ({ ...row, split: costSplit([row]) })),
+      top,
+    });
+  });
+
   app.get("/runs", async (c) => {
     const projectId = c.get("projectId");
     const status = c.req.query("status");
@@ -160,7 +237,7 @@ export function apiRoutes(ctx: AppContext) {
           .where(eq(runs.sessionId, run.sessionId))
           .orderBy(sql`${runs.startedAt} asc nulls last`)
       : [];
-    return c.json({ run, session: session ?? null, steps: stepRows, sessionRuns: siblings });
+    return c.json({ run, session: session ?? null, steps: stepRows, sessionRuns: siblings, costSplit: costSplit(stepRows.filter((step) => step.kind === "llm")) });
   });
 
   /** Failed steps grouped by what failed and how, most runs first, with the rule-based hint. */

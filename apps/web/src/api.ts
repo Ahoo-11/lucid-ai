@@ -74,6 +74,44 @@ export type RunDetail = {
   session: Session | null;
   steps: Step[];
   sessionRuns: { id: string; name: string | null; startedAt: string | null; status: Status }[];
+  costSplit: CostSplit | null;
+};
+
+/** What each kind of token cost at list prices; null when no model involved has a known price. */
+export type CostSplit = { input: number; cacheRead: number; cacheWrite: number; output: number };
+
+export type TokenSums = {
+  runs: number;
+  /** Null when none of these runs used a model with a known price. */
+  costUsd: number | null;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  reasoningTokens: number;
+  llmCalls: number;
+};
+
+/** The Spend view: one period's totals, by UTC hour, by agent, by model, and its costliest runs. */
+export type Usage = {
+  days: number;
+  since: string;
+  totals: TokenSums & { unpricedRuns: number; split: CostSplit | null };
+  hours: (TokenSums & { at: string })[];
+  agents: (TokenSums & { harness: string })[];
+  models: {
+    model: string | null;
+    provider: string | null;
+    calls: number;
+    costUsd: number | null;
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
+    unpriced: number;
+    split: CostSplit | null;
+  }[];
+  top: (Pick<RunListItem, "id" | "name" | "harness" | "model" | "startedAt" | "costUsd" | "inputTokens" | "outputTokens" | "cacheReadTokens" | "cacheWriteTokens">)[];
 };
 
 export type Overview = {
@@ -276,6 +314,7 @@ export const api = {
   overview: () => request<Overview>("/overview"),
   runs: (params: URLSearchParams) => request<{ runs: RunListItem[]; nextBefore: string | null }>(`/runs?${params}`),
   run: (id: string) => request<RunDetail>(`/runs/${id}`),
+  usage: (days: number) => request<Usage>(`/usage?days=${days}`),
   issues: () => request<{ issues: Issue[]; diagnosisModel?: string | null; autoDiagnose: boolean }>("/issues"),
   /** Takes a problem out of the Inbox (or brings it back). */
   ignoreIssue: (issueId: string, ignore: boolean) =>

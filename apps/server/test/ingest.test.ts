@@ -1,10 +1,11 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
+import { eq } from "drizzle-orm";
 import { beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../src/app";
 import type { AppContext } from "../src/context";
-import { openDb } from "../src/db";
+import { openDb, schema } from "../src/db";
 import { createApiKey, ensureDefaultProject } from "../src/keys";
 import { LiveHub } from "../src/live";
 import { encodeTraces } from "../src/otlpProto";
@@ -261,6 +262,87 @@ describe("Hermes", () => {
       headers: { "content-type": "application/json", "content-encoding": "gzip" },
     });
     expect(garbage.status).toBe(400);
+  });
+});
+
+describe("redaction", () => {
+  const KEY = "sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789";
+  // An agent that cats a .env: the secrets must not reach the raw copy, the run, or its steps.
+  const leaky = (session: string) => [
+    { type: "user", promptId: `p-${session}`, sessionId: session, timestamp: "2026-10-27T12:00:00Z", message: { role: "user", content: "Why does the deploy fail?" } },
+    { type: "assistant", requestId: `req-${session}`, sessionId: session, timestamp: "2026-10-27T12:00:01Z", message: { id: "m", role: "assistant", stop_reason: "tool_use", content: [{ type: "tool_use", id: `toolu-${session}`, name: "Bash", input: { command: "cat .env" } }] } },
+    { type: "user", promptId: `p-${session}`, sessionId: session, timestamp: "2026-10-27T12:00:02Z", message: { role: "user", content: [{ type: "tool_result", tool_use_id: `toolu-${session}`, content: `ANTHROPIC_API_KEY=${KEY}\nDB_PASSWORD=hunter2hunter2\nADMIN_EMAIL=ops@example.com` }] } },
+  ];
+  const everything = async (env: Awaited<ReturnType<typeof setup>>) => {
+    const raw = await env.db.select({ payload: schema.rawEvents.payload }).from(schema.rawEvents);
+    const steps = await env.db.select({ input: schema.steps.inputPreview, output: schema.steps.outputPreview }).from(schema.steps);
+    const blobs = await env.db.select({ content: schema.blobs.content }).from(schema.blobs);
+    return JSON.stringify([raw, steps, blobs]);
+  };
+
+  it("scrubs secrets by default and keeps the rest readable", async () => {
+    const env = await setup();
+    expect((await env.post("/v1/transcripts", { harness: "claude-code", fileKey: "leak", file: { kind: "main" }, startLine: 0, lines: leaky("leak") })).status).toBe(200);
+    const stored = await everything(env);
+    expect(stored).not.toContain(KEY);
+    expect(stored).not.toContain("hunter2hunter2");
+    expect(stored).toContain("<SECRET_1>");
+    // Not secrets: the email and the run itself are kept.
+    expect(stored).toContain("ops@example.com");
+    expect((await env.get<{ runs: RunRow[] }>("/api/runs")).runs.map((run) => run.name)).toEqual(["Why does the deploy fail?"]);
+  });
+
+  it("stores as received for a project that turned redaction off", async () => {
+    const env = await setup();
+    await env.db.update(schema.projects).set({ redaction: { categories: [] } }).where(eq(schema.projects.id, env.projectId));
+    await env.post("/v1/transcripts", { harness: "claude-code", fileKey: "kept", file: { kind: "main" }, startLine: 0, lines: leaky("kept") });
+    expect(await everything(env)).toContain(KEY);
+  });
+});
+
+describe("usage", () => {
+  type Sums = { runs: number; costUsd: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; llmCalls: number };
+  type Split = { input: number; cacheRead: number; cacheWrite: number; output: number } | null;
+  type Usage = {
+    totals: Sums & { unpricedRuns: number; split: Split };
+    hours: (Sums & { at: string })[];
+    agents: (Sums & { harness: string })[];
+    models: { model: string; calls: number; unpriced: number; split: Split }[];
+    top: { id: string }[];
+  };
+
+  it("adds up spend and tokens by hour, agent and model, and splits the cost by kind of token", async () => {
+    const env = await setup();
+    const now = new Date();
+    const run = (id: string, harness: string, startedAt: Date, extra: Partial<typeof schema.runs.$inferInsert>) => ({ id, projectId: env.projectId, harness, externalId: id, source: "hook", status: "ok", startedAt, ...extra });
+    await env.db.insert(schema.runs).values([
+      run("r1", "hermes", now, { costUsd: 0.5, inputTokens: 1000, outputTokens: 200, cacheReadTokens: 5000, llmCallCount: 2 }),
+      run("r2", "claude-code", now, { costUsd: 0.25, inputTokens: 100, outputTokens: 50, llmCallCount: 1, costIncomplete: 1 }),
+      run("old", "hermes", new Date(Date.now() - 10 * 86_400_000), { costUsd: 9 }),
+    ]);
+    const step = (id: string, runId: string, extra: Partial<typeof schema.steps.$inferInsert>) => ({ id, projectId: env.projectId, runId, externalId: id, kind: "llm", name: "call", startedAt: now, ...extra });
+    await env.db.insert(schema.steps).values([
+      step("s1", "r1", { model: "gpt-4o", provider: "openai", inputTokens: 1000, outputTokens: 200, cacheReadTokens: 5000, costUsd: 0.5 }),
+      step("s2", "r2", { model: "mystery-model", inputTokens: 100, outputTokens: 50 }),
+    ]);
+
+    const week = await env.get<Usage>("/api/usage?days=7");
+    expect(week.totals).toMatchObject({ runs: 2, costUsd: 0.75, inputTokens: 1100, outputTokens: 250, cacheReadTokens: 5000, llmCalls: 3, unpricedRuns: 1 });
+    expect(week.hours).toHaveLength(1);
+    expect(week.hours[0]!.at).toMatch(/^\d{4}-\d\d-\d\dT\d\d:00:00Z$/);
+    expect(week.agents.map((a) => a.harness)).toEqual(["hermes", "claude-code"]);
+    expect(week.top.map((r) => r.id)).toEqual(["r1", "r2"]);
+    // gpt-4o at its list price ($2.50 in, $10 out per million; cache reads at the input price without a cache rate).
+    const split = week.models.find((m) => m.model === "gpt-4o")!.split!;
+    expect(split.input).toBeCloseTo(0.0025);
+    expect(split.cacheRead).toBeCloseTo(0.0125);
+    expect(split.output).toBeCloseTo(0.002);
+    expect(week.models.find((m) => m.model === "mystery-model")).toMatchObject({ calls: 1, unpriced: 1, split: null });
+    expect(week.totals.split!.input).toBeCloseTo(0.0025);
+
+    expect((await env.get<Usage>("/api/usage?days=30")).totals.costUsd).toBeCloseTo(9.75);
+    // Anything else is a week.
+    expect((await env.get<Usage>("/api/usage?days=9999")).totals.runs).toBe(2);
   });
 });
 

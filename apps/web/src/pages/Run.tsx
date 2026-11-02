@@ -5,6 +5,7 @@ import { Link, useParams } from "react-router";
 import { type RunDetail, type Step, api } from "../api";
 import { cost, dateTime, duration, harnessLabel, mcpParts, plural, tokens, toolLabel } from "../format";
 import { type Node, type Row, type Turn, argSummary, buildTree, contextTokens, story, toRows, toTurns } from "../story";
+import { InOut, TokenBreakdown } from "../tokens";
 import { Card, Chip, KindIcon, Prose, Section, Stat, StatusDot, StatusPill, cx, kindLabel } from "../ui";
 
 export function RunPage() {
@@ -55,6 +56,19 @@ export function RunPage() {
           hint="The most tokens the model had to read in a single call (new input + cached). Large contexts are slower and cost more."
         />
       </Card>
+
+      {run.llmCallCount > 0 && (
+        <Card className="px-5 py-4">
+          <div className="mb-3 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+            <h2 className="text-sm font-semibold">Tokens and cost</h2>
+            <span className="text-xs text-zinc-500 dark:text-zinc-400">
+              <InOut t={run} /> across {plural(run.llmCallCount, "model call")}
+              {data.costSplit && " · cost by kind is estimated from list prices"}
+            </span>
+          </div>
+          <TokenBreakdown t={run} split={data.costSplit} />
+        </Card>
+      )}
 
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,440px)]">
         <div className="min-w-0 space-y-5">
@@ -246,7 +260,18 @@ function TurnRows({ turn, selected, onSelect, depth }: { turn: Turn; selected: s
   return (
     <li>
       {turn.llm && (
-        <StepButton step={turn.llm} selected={selected === turn.llm.externalId} onSelect={onSelect} meta={<>{duration(turn.llm.durationMs)} · {cost(turn.llm.costUsd)}</>}>
+        <StepButton
+          step={turn.llm}
+          selected={selected === turn.llm.externalId}
+          onSelect={onSelect}
+          meta={
+            <>
+              <InOut t={turn.llm} className="hidden sm:inline" />
+              <span className="hidden sm:inline"> · </span>
+              {duration(turn.llm.durationMs)} · {cost(turn.llm.costUsd)}
+            </>
+          }
+        >
           <span className="font-medium">{chosenLabel(turn)}</span>
           {turn.llm.outputPreview && !turn.llm.outputPreview.startsWith("Calls ") && (
             <span className="ml-2 text-zinc-500 dark:text-zinc-400">{turn.llm.outputPreview}</span>
@@ -470,9 +495,9 @@ function DecisionDetail({ step, steps }: { step: Step; steps: Step[] }) {
       <div className="space-y-3 p-4">
         <Section title="What it knew" hint="Tokens the model read on this call: new input plus input served from the prompt cache">
           <div className="grid grid-cols-3 gap-3 text-sm">
-            <Mini label="Context" value={tokens(contextTokens(step))} />
+            <Mini label="Tokens in" value={tokens(contextTokens(step))} />
             <Mini label="From cache" value={tokens(step.cacheReadTokens)} />
-            <Mini label="Wrote" value={tokens(step.outputTokens)} />
+            <Mini label="Tokens out" value={tokens(step.outputTokens)} />
           </div>
           <div className="flex flex-wrap gap-1.5 text-xs text-zinc-500">
             {Object.entries(params)
