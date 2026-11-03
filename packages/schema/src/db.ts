@@ -155,6 +155,41 @@ export const issueExplanations = pgTable(
   (t) => [primaryKey({ columns: [t.projectId, t.issueId] })],
 );
 
+/**
+ * A problem in a run that no step reported: the agent looping on the same
+ * call, a cost spike, a refusal or give-up it didn't need, or an answer that
+ * doesn't match what happened. Rules find loops and cost spikes; refusals and
+ * wrong answers start as suspected, and the model's check confirms or clears
+ * them. Confirmed ones are grouped into Inbox problems.
+ */
+export const runFindings = pgTable(
+  "run_findings",
+  {
+    projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+    runId: text("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
+    /** loop, cost, refusal or wrong_answer. */
+    kind: text("kind").notNull(),
+    /** suspected (waiting for the model's check), confirmed, or cleared (the model found nothing wrong). */
+    status: text("status").notNull(),
+    /** What groups it with others: the tool a loop repeats, otherwise the task. */
+    subject: text("subject").notNull(),
+    /** What Lucid saw, in plain words. */
+    evidence: text("evidence").notNull(),
+    /** The model's reason for confirming or clearing a suspected one. */
+    verdict: text("verdict"),
+    /** The model call where it went wrong: the decision a fix test replays. */
+    stepId: text("step_id"),
+    /** Set when the model checked it; these count toward the daily cap. */
+    model: text("model"),
+    inputTokens: integer("input_tokens"),
+    outputTokens: integer("output_tokens"),
+    latencyMs: integer("latency_ms"),
+    checkedAt: ts("checked_at"),
+    createdAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.projectId, t.runId, t.kind] }), index("run_findings_project_status").on(t.projectId, t.status)],
+);
+
 /** One replayed decision in a fix test: did the agent, with the fix, avoid the problem? */
 export type FixTestResult = { runId: string; runName: string | null; pass: boolean; reason: string; decision: string };
 
@@ -323,6 +358,8 @@ export const runs = pgTable(
     costIncomplete: integer("cost_incomplete").notNull().default(0),
     summary: text("summary"),
     metadata: jsonb("metadata").$type<Record<string, unknown>>(),
+    /** When Lucid last looked at the finished run for loops, cost spikes, refusals and wrong answers (see run_findings). */
+    scannedAt: ts("scanned_at"),
     createdAt: createdAt(),
     updatedAt: ts("updated_at").notNull().defaultNow(),
   },

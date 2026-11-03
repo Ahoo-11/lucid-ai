@@ -20,10 +20,14 @@ import {
   TriangleAlert,
   UserRound,
   Wrench,
+  Repeat,
+  TrendingUp,
+  Ban,
+  MessageSquareWarning,
 } from "lucide-react";
 import { type ReactNode, useEffect, useState, useSyncExternalStore } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
-import { type AppliedLesson, type Diagnosis, type FixTest, type Issue, api } from "../api";
+import { type AppliedLesson, type Diagnosis, type FixTest, type Issue, type ProblemKind, api } from "../api";
 import { ago, harnessLabel, plural } from "../format";
 import { BRANDS, BrandMark } from "../landing/logos";
 import { CopyButton, Empty, cx } from "../ui";
@@ -87,7 +91,7 @@ const EMPTY: Record<View, [title: string, text: string]> = {
   needs: ["Nothing needs a fix", "When an agent keeps failing the same way, it shows up here with a fix you can approve."],
   fixing: ["No fixes being tried", "Approve a fix and Lucid watches whether the problem stops."],
   fixed: ["Nothing fixed yet", `A fix lands here once the agent runs ${FIXED_AFTER_RUNS} times without the problem.`],
-  once: ["No one-off errors", "Errors that happened in a single run show up here."],
+  once: ["No one-off problems", "Problems that happened in a single run show up here."],
   ignored: ["Nothing ignored", "Problems you ignore wait here, in case you want them back."],
 };
 
@@ -216,7 +220,7 @@ export function Inbox() {
         {view === "once" || view === "ignored" ? (
           <button type="button" onClick={() => showView("needs")} className="inline-flex items-center gap-1 text-sm font-medium text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white">
             <ArrowLeft className="size-4" />
-            {view === "once" ? "One-off errors" : "Ignored problems"}
+            {view === "once" ? "One-off problems" : "Ignored problems"}
           </button>
         ) : null}
 
@@ -245,7 +249,7 @@ export function Inbox() {
 
         {(view === "needs" || view === "fixing" || view === "fixed") && (count("once") > 0 || count("ignored") > 0) && (
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-zinc-500 dark:text-zinc-400">
-            {count("once") > 0 && <MoreLink label={`One-off errors (${count("once")})`} onClick={() => showView("once")} />}
+            {count("once") > 0 && <MoreLink label={`One-off problems (${count("once")})`} onClick={() => showView("once")} />}
             {count("ignored") > 0 && <MoreLink label={`Ignored (${count("ignored")})`} onClick={() => showView("ignored")} />}
           </div>
         )}
@@ -291,7 +295,7 @@ function AutoDiagnose({ model, on }: { model: string; on: boolean }) {
   return (
     <label
       className="flex shrink-0 cursor-pointer items-center gap-2 text-xs font-medium text-zinc-600 dark:text-zinc-300"
-      title={`${modelLabel(model)} diagnoses each recurring problem by itself, up to 20 a day. Off: only when you click Diagnose.`}
+      title={`${modelLabel(model)} diagnoses each recurring problem by itself (up to 20 a day), and checks runs that may have given up or answered wrong (up to 30 a day). Off: only when you click.`}
     >
       {isMuse(model) && <BrandMark brand={BRANDS.meta} className="size-4" />}
       <span>
@@ -316,8 +320,23 @@ function Pill({ stage }: { stage: Stage }) {
   return <span className={cx("inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[11px] font-medium whitespace-nowrap ring-1 ring-inset", PILL[tone])}>{label}</span>;
 }
 
-/** A picture of where it broke: a command, a file, the web, a model call. */
+/** The problems no step reports, in a word: on cards before the agent's name, and in the panel. */
+const PROBLEM_LABEL: Record<Exclude<ProblemKind, "error">, string> = { loop: "Loop", cost: "Cost spike", refusal: "Gave up", wrong_answer: "Wrong answer" };
+
+/** How Lucid finds each of them, for the Evidence tab. */
+const FOUND_HOW: Record<Exclude<ProblemKind, "error">, string> = {
+  loop: "Lucid looks for the same call, with the same input, made three or more times with the same result.",
+  cost: "Lucid compares each run with what that agent's runs usually cost: three times the usual or more is a spike.",
+  refusal: "Runs that end with the agent refusing or giving up are checked by Muse Spark, which decides whether it could have done the task.",
+  wrong_answer: "Runs that answered despite failed steps, and a few spot checks, are read by Muse Spark against what the tools returned.",
+};
+
+/** A picture of what went wrong: a loop, a cost spike, a refusal, a wrong answer, or where it broke. */
 function iconFor(issue: Issue) {
+  if (issue.problem === "loop") return Repeat;
+  if (issue.problem === "cost") return TrendingUp;
+  if (issue.problem === "refusal") return Ban;
+  if (issue.problem === "wrong_answer") return MessageSquareWarning;
   const tool = (issue.toolName ?? "").toLowerCase();
   if (issue.kind === "llm") return Sparkles;
   if (tool.startsWith("mcp__")) return Plug;
@@ -404,6 +423,7 @@ function ProblemCard({ issue, model, selected, onSelect }: { issue: Issue; model
         </span>
         <span className="mt-1 line-clamp-2 text-sm text-zinc-500 dark:text-zinc-400">{summaryOf(issue, stage, model)}</span>
         <span className="mt-2 block text-xs text-zinc-400 dark:text-zinc-500">
+          {issue.problem !== "error" && `${PROBLEM_LABEL[issue.problem]} · `}
           {harnessLabel(issue.harness)} · {plural(issue.runs, "run")}
           {watching ? ` · fix live ${ago(issue.lesson!.deliveredAt)}` : issue.lastSeen && ` · ${ago(issue.lastSeen)}`}
         </span>
@@ -529,7 +549,8 @@ function ProblemPanel({ issue, model, onClose, onIgnored }: { issue: Issue; mode
             <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-zinc-500 dark:text-zinc-400">
               <Pill stage={stage} />
               <span>
-                {agent} · {plural(issue.runs, "failed run")}
+                {issue.problem !== "error" && `${PROBLEM_LABEL[issue.problem]} · `}
+                {agent} · {plural(issue.runs, issue.problem === "error" ? "failed run" : "run")}
                 {issue.lastSeen && ` · last ${ago(issue.lastSeen)}`}
               </span>
             </div>
@@ -543,7 +564,7 @@ function ProblemPanel({ issue, model, onClose, onIgnored }: { issue: Issue; mode
             Runs <span className="ml-0.5 rounded-full bg-zinc-100 px-1.5 text-xs tabular-nums text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">{issue.runs}</span>
           </TabButton>
           <TabButton tab="error" current={tab} onClick={setTab}>
-            Error
+            {issue.problem === "error" ? "Error" : "Evidence"}
           </TabButton>
         </div>
       </div>
@@ -902,8 +923,19 @@ function RunsTab({ issue }: { issue: Issue }) {
   );
 }
 
-/** The raw error: for digging, not deciding. */
+/** The raw error: for digging, not deciding. For a problem no step reported, what Lucid saw instead. */
 function ErrorTab({ issue }: { issue: Issue }) {
+  if (issue.problem !== "error") {
+    return (
+      <div className="space-y-3">
+        <p className="text-sm text-zinc-600 dark:text-zinc-300">What Lucid saw in the newest run:</p>
+        <div className="rounded-xl border border-zinc-200 p-4 text-sm leading-relaxed whitespace-pre-wrap text-zinc-700 [overflow-wrap:anywhere] dark:border-zinc-800 dark:text-zinc-300">
+          {issue.sample}
+        </div>
+        <p className="text-xs text-zinc-500 dark:text-zinc-400">{FOUND_HOW[issue.problem]}</p>
+      </div>
+    );
+  }
   return (
     <div className="space-y-3">
       <p className="text-sm text-zinc-600 dark:text-zinc-300">

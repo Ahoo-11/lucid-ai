@@ -35,6 +35,8 @@ export type IssueForDiagnosis = Hint & {
   occurrences: number;
   runs: number;
   examples: { runId: string }[];
+  /** The evidence to read, for problems that aren't a failed step (loops, cost spikes, ...). */
+  evidence?: () => Promise<string>;
 };
 
 /** What it cost; null where the provider didn't say. */
@@ -139,7 +141,7 @@ export function createExplainer(ctx: AppContext) {
         temperature: 0.2,
         messages: [
           { role: "system", content: SYSTEM },
-          { role: "user", content: await evidence(projectId, issue) },
+          { role: "user", content: issue.evidence ? await issue.evidence() : await evidence(projectId, issue) },
         ],
       });
       const cost = { inputTokens: result.inputTokens ?? null, outputTokens: result.outputTokens ?? null, latencyMs: result.latencyMs };

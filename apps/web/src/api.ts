@@ -120,8 +120,12 @@ export type Overview = {
   topTools: { tool: string; calls: number; errors: number; avgMs: number | null }[];
 };
 
+/** What went wrong: a step that failed, or something Lucid found in a run that no step reported. */
+export type ProblemKind = "error" | "loop" | "cost" | "refusal" | "wrong_answer";
+
 export type Issue = {
   id: string;
+  problem: ProblemKind;
   kind: StepKind;
   toolName: string | null;
   signature: string;

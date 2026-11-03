@@ -10,6 +10,7 @@ import { CLOSED, resolveAccount } from "../auth";
 import { arenaRoutes } from "../ee/arena/routes";
 import { createExplainer } from "../explain";
 import { createFixTester, failingDecisions } from "../fixtest";
+import { createReviewer } from "../review";
 import { errorSignature, hintFor } from "../insights";
 import { LESSON_HARNESSES, applyLesson, cleanLesson, lessonsForIssues, runsSince, setLessonStatus } from "../lessons";
 import { publicEndpoint } from "../install";
@@ -77,6 +78,7 @@ export function apiRoutes(ctx: AppContext) {
   const { db } = ctx;
   const explainer = createExplainer(ctx);
   const tester = createFixTester(ctx);
+  const reviewer = createReviewer(ctx);
 
   app.use("*", requireProject(ctx));
 
@@ -293,18 +295,33 @@ export function apiRoutes(ctx: AppContext) {
       .sort((a, b) => b.runs - a.runs || b.occurrences - a.occurrences);
   }
 
+  /**
+   * Everything the Inbox lists: failed steps grouped by cause, and the problems
+   * no step reported (loops, cost spikes, refusals, wrong answers), most runs first.
+   */
+  async function allIssues(projectId: string) {
+    const [failures, findings] = await Promise.all([loadIssues(projectId), reviewer.issues(projectId)]);
+    return [
+      ...failures.map((issue) => ({ ...issue, problem: "error" as const, decisions: [] as string[], evidence: undefined })),
+      // The model reads what Lucid found and the run itself, not a failed step.
+      ...findings.map((issue) => ({ ...issue, evidence: () => reviewer.evidence(projectId, issue) })),
+    ].sort((a, b) => b.runs - a.runs || b.occurrences - a.occurrences);
+  }
+
   app.get("/issues", async (c) => {
     const projectId = c.get("projectId");
-    const issues = await loadIssues(projectId);
     const [project] = await db.select({ autoDiagnose: projects.autoDiagnose }).from(projects).where(eq(projects.id, projectId)).limit(1);
     const autoDiagnose = project?.autoDiagnose ?? true;
+    // Runs finished since the last look are checked for problems no step reported.
+    await reviewer.scan(projectId, autoDiagnose);
+    const issues = await allIssues(projectId);
     const ignored = new Set((await db.select({ issueId: ignoredIssues.issueId }).from(ignoredIssues).where(eq(ignoredIssues.projectId, projectId))).map((row) => row.issueId));
     // Opening the Inbox starts diagnoses for recurring problems never diagnosed, up to the daily cap.
     const diagnoses = await explainer.diagnoses(projectId, issues.slice(0, 200), { auto: autoDiagnose, ignored });
     const applied = await lessonsForIssues(db, projectId, issues.slice(0, 200).map((issue) => issue.id));
     const tests = await tester.latest(projectId, issues.slice(0, 200).map((issue) => issue.id));
     const shown = await Promise.all(
-      issues.map(async ({ failedAt, ...issue }) => {
+      issues.map(async ({ failedAt, decisions: _decisions, evidence: _evidence, ...issue }) => {
         const lesson = applied.get(issue.id);
         // A fix's results: this problem's failures, and the agent's runs, since it went live.
         const since = lesson?.status === "active" && lesson.deliveredAt ? new Date(lesson.deliveredAt) : null;
@@ -329,7 +346,7 @@ export function apiRoutes(ctx: AppContext) {
     const projectId = c.get("projectId");
     const text = cleanLesson(((await c.req.json().catch(() => ({}))) as { text?: unknown }).text);
     if (!text) return c.json({ error: "Write the fix first." }, 400);
-    const issue = (await loadIssues(projectId)).find((candidate) => candidate.id === c.req.param("id"));
+    const issue = (await allIssues(projectId)).find((candidate) => candidate.id === c.req.param("id"));
     if (!issue) return c.json({ error: "That problem isn't in the Inbox anymore." }, 404);
     // The judge needs to know the mistake: the model's diagnosis when there is one.
     const [diagnosis] = await db
@@ -338,7 +355,7 @@ export function apiRoutes(ctx: AppContext) {
       .where(and(eq(issueExplanations.projectId, projectId), eq(issueExplanations.issueId, issue.id), eq(issueExplanations.status, "ready")));
     const about = diagnosis?.title && diagnosis.why ? diagnosis : issue;
     const problem = [`${about.title}. ${about.why}`, issue.toolName && `The failing step: ${issue.toolName}.`, issue.sample && `The error: ${issue.sample.slice(0, 500)}`].filter(Boolean).join("\n");
-    const decisions = await failingDecisions(ctx, projectId, issue);
+    const decisions = issue.problem === "error" ? await failingDecisions(ctx, projectId, issue) : issue.decisions;
     return c.json({ fixTest: await tester.start(projectId, { issueId: issue.id, problem, decisions }, text) });
   });
 
@@ -351,7 +368,7 @@ export function apiRoutes(ctx: AppContext) {
       await db.delete(ignoredIssues).where(and(eq(ignoredIssues.projectId, projectId), eq(ignoredIssues.issueId, issueId)));
       return c.json({ ignored: false });
     }
-    if (!(await loadIssues(projectId)).some((issue) => issue.id === issueId)) return c.json({ error: "That problem isn't in the Inbox anymore." }, 404);
+    if (!(await allIssues(projectId)).some((issue) => issue.id === issueId)) return c.json({ error: "That problem isn't in the Inbox anymore." }, 404);
     await db.insert(ignoredIssues).values({ projectId, issueId }).onConflictDoNothing();
     return c.json({ ignored: true });
   });
@@ -370,7 +387,7 @@ export function apiRoutes(ctx: AppContext) {
     const projectId = c.get("projectId");
     const text = cleanLesson(((await c.req.json().catch(() => ({}))) as { text?: unknown }).text);
     if (!text) return c.json({ error: "Write the lesson first." }, 400);
-    const issue = (await loadIssues(projectId)).find((candidate) => candidate.id === c.req.param("id"));
+    const issue = (await allIssues(projectId)).find((candidate) => candidate.id === c.req.param("id"));
     if (!issue) return c.json({ error: "That problem isn't in the Inbox anymore." }, 404);
     if (!LESSON_HARNESSES.has(issue.harness)) return c.json({ error: `Lucid can't apply lessons in ${issue.harness} yet. Copy it into the agent's instructions instead.` }, 409);
     if (!(await tester.passed(projectId, issue.id, text))) return c.json({ error: UNTESTED }, 409);
@@ -396,7 +413,7 @@ export function apiRoutes(ctx: AppContext) {
     if (!(c.req.header("content-type") ?? "").includes("application/json")) return c.json({ error: "Send JSON" }, 415);
     if (!explainer.enabled) return c.json({ error: "Diagnoses need a model key: set BASETEN_API_KEY for the Lucid server." }, 409);
     const projectId = c.get("projectId");
-    const issue = (await loadIssues(projectId)).find((candidate) => candidate.id === c.req.param("id"));
+    const issue = (await allIssues(projectId)).find((candidate) => candidate.id === c.req.param("id"));
     if (!issue) return c.json({ error: "That problem isn't in the Inbox anymore." }, 404);
     return c.json({ diagnosis: explainer.request(projectId, issue) });
   });
