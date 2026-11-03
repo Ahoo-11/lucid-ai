@@ -12,7 +12,8 @@ import { CLOSED, resolveAccount } from "../auth";
 import { arenaRoutes } from "../ee/arena/routes";
 import { createExplainer } from "../explain";
 import { createFixTester, failingDecisions } from "../fixtest";
-import { createReviewer } from "../review";
+import { AFFECTED_MAX, type CauseOf, createReviewer } from "../review";
+import { createLinker, groupByCause } from "../roots";
 import { errorSignature, hintFor } from "../insights";
 import { LESSON_HARNESSES, applyLesson, cleanLesson, lessonsForIssues, runsSince, setLessonStatus } from "../lessons";
 import { publicEndpoint } from "../install";
@@ -24,7 +25,7 @@ import { listPlugins, requestUpdate } from "../plugins";
 import { currentSyncs } from "../syncs";
 import { writeBatch } from "../writer";
 
-const { apiKeys, blobs, ignoredIssues, issueExplanations, lessons, projects, rawEvents, runs, sessions, steps } = schema;
+const { apiKeys, blobs, fixTests, ignoredIssues, issueExplanations, lessons, projects, rawEvents, runs, sessions, steps } = schema;
 const UNTESTED = "Test this fix first: Lucid applies a fix only after it passes a test on past runs.";
 const STATUSES = new Set(["ok", "error", "running"]);
 /** The Spend view's periods, in days. */
@@ -94,6 +95,7 @@ export function apiRoutes(ctx: AppContext) {
   const explainer = createExplainer(ctx);
   const tester = createFixTester(ctx);
   const reviewer = createReviewer(ctx);
+  const linker = createLinker(ctx);
 
   app.use("*", requireProject(ctx));
 
@@ -351,7 +353,11 @@ export function apiRoutes(ctx: AppContext) {
     return c.json(contextBreakdown(calls, run.input));
   });
 
-  /** Failed steps grouped by what failed and how, most runs first, with the rule-based hint. */
+  /**
+   * Failed steps grouped by what failed and how, most runs first, with the
+   * rule-based hint; and what a loop, give-up or wrong answer in a run came
+   * after: the run's last failure, or the failure the looping tool hit most.
+   */
   async function loadIssues(projectId: string) {
     const failed = await db
       .select({
@@ -381,38 +387,123 @@ export function apiRoutes(ctx: AppContext) {
       lastSeen: Date | null;
       firstSeen: Date | null;
       examples: { runId: string; runName: string | null }[];
+      affected: { runId: string; runName: string | null; at: Date | null }[];
       /** When each failure happened, to count the ones after a fix went live. */
       failedAt: number[];
     };
     const groups = new Map<string, Group>();
+    const lastIn = new Map<string, string>();
+    /** By run and tool: how often each failure happened. */
+    const byTool = new Map<string, Map<string, number>>();
     for (const row of failed) {
       const signature = errorSignature(row.error);
       const key = `${row.kind}\u0000${row.toolName ?? ""}\u0000${signature}`;
-      const group = groups.get(key) ?? { key, kind: row.kind, toolName: row.toolName, signature, sample: row.error, harness: row.harness, occurrences: 0, runIds: new Set(), lastSeen: row.startedAt, firstSeen: row.startedAt, examples: [], failedAt: [] };
+      const group = groups.get(key) ?? { key, kind: row.kind, toolName: row.toolName, signature, sample: row.error, harness: row.harness, occurrences: 0, runIds: new Set(), lastSeen: row.startedAt, firstSeen: row.startedAt, examples: [], affected: [], failedAt: [] };
       group.occurrences++;
       if (row.startedAt) group.failedAt.push(row.startedAt.getTime());
-      if (!group.runIds.has(row.runId) && group.examples.length < 5) group.examples.push({ runId: row.runId, runName: row.runName });
+      if (!group.runIds.has(row.runId)) {
+        if (group.examples.length < 5) group.examples.push({ runId: row.runId, runName: row.runName });
+        if (group.affected.length < AFFECTED_MAX) group.affected.push({ runId: row.runId, runName: row.runName, at: row.startedAt });
+      }
       group.runIds.add(row.runId);
       if (row.startedAt && (!group.firstSeen || row.startedAt < group.firstSeen)) group.firstSeen = row.startedAt;
       groups.set(key, group);
+      // Newest first, so the first failure seen in a run is its last.
+      if (!lastIn.has(row.runId)) lastIn.set(row.runId, key);
+      if (row.toolName) {
+        const counts = byTool.get(`${row.runId}\u0000${row.toolName}`) ?? new Map<string, number>();
+        byTool.set(`${row.runId}\u0000${row.toolName}`, counts.set(key, (counts.get(key) ?? 0) + 1));
+      }
     }
-    return [...groups.values()]
-      .map(({ runIds, key, ...group }) => ({ id: Buffer.from(key).toString("base64url"), ...group, runs: runIds.size, ...hintFor(group.toolName, group.kind, group.sample) }))
+    const idOf = (key: string) => Buffer.from(key).toString("base64url");
+    const issues = [...groups.values()]
+      .map(({ runIds, key, ...group }) => ({ id: idOf(key), ...group, runs: runIds.size, runIds: [...runIds], ...hintFor(group.toolName, group.kind, group.sample) }))
       .sort((a, b) => b.runs - a.runs || b.occurrences - a.occurrences);
+    const causeOf: CauseOf = ({ runId, kind, subject }) => {
+      if (kind !== "loop") return lastIn.has(runId) ? idOf(lastIn.get(runId)!) : null;
+      const counts = [...(byTool.get(`${runId}\u0000${subject}`) ?? [])].sort((a, b) => b[1] - a[1]);
+      return counts[0] ? idOf(counts[0][0]) : null;
+    };
+    return { issues, causeOf };
   }
 
   /**
-   * Everything the Inbox lists: failed steps grouped by cause, and the problems
-   * no step reported (loops, cost spikes, refusals, wrong answers), most runs first.
+   * Everything the Inbox lists, one entry per root cause (see roots.ts): failed
+   * steps grouped by how they failed, and the problems no step reported (loops,
+   * cost spikes, refusals, wrong answers), joined when they share a cause. Most
+   * runs first. Each entry is its main problem with the others' runs added.
    */
   async function allIssues(projectId: string) {
-    const [failures, findings] = await Promise.all([loadIssues(projectId), reviewer.issues(projectId)]);
-    return [
-      ...failures.map((issue) => ({ ...issue, problem: "error" as const, decisions: [] as string[], evidence: undefined })),
+    const failures = await loadIssues(projectId);
+    const [findings, grouping, saved, fixed] = await Promise.all([
+      reviewer.issues(projectId, failures.causeOf),
+      linker.grouping(projectId),
+      db.select({ issueId: issueExplanations.issueId, title: issueExplanations.title }).from(issueExplanations).where(and(eq(issueExplanations.projectId, projectId), eq(issueExplanations.status, "ready"))),
+      Promise.all([
+        db.select({ issueId: lessons.issueId }).from(lessons).where(eq(lessons.projectId, projectId)),
+        db.select({ issueId: fixTests.issueId }).from(fixTests).where(eq(fixTests.projectId, projectId)),
+      ]).then((rows) => new Set(rows.flat().map((row) => row.issueId))),
+    ]);
+    const symptoms = [
+      ...failures.issues.map((issue) => ({ ...issue, problem: "error" as const, decisions: [] as string[], evidence: undefined, cause: null })),
       // The model reads what Lucid found and the run itself, not a failed step.
       ...findings.map((issue) => ({ ...issue, evidence: () => reviewer.evidence(projectId, issue) })),
-    ].sort((a, b) => b.runs - a.runs || b.occurrences - a.occurrences);
+    ];
+    type Symptom = (typeof symptoms)[number];
+    const titles = new Map(saved.flatMap((row) => (row.title ? [[row.issueId, row.title] as const] : [])));
+    const time = (at: Date | null) => at?.getTime() ?? 0;
+    // The main problem keeps a fix being tried or tracked, then the failure behind the others, then a diagnosis.
+    const better = (a: Symptom, b: Symptom) =>
+      Number(fixed.has(b.id)) - Number(fixed.has(a.id)) ||
+      Number(b.problem === "error") - Number(a.problem === "error") ||
+      Number(titles.has(b.id)) - Number(titles.has(a.id)) ||
+      b.runs - a.runs ||
+      time(a.firstSeen) - time(b.firstSeen) ||
+      a.id.localeCompare(b.id);
+    const entries = groupByCause(symptoms, grouping, better).map(({ main, members }) => {
+      const all = members.map(({ symptom }) => symptom);
+      const runIds = new Set(all.flatMap((symptom) => symptom.runIds));
+      const affected = new Map<string, { runId: string; runName: string | null; at: Date | null; problems: string[] }>();
+      for (const symptom of all) {
+        for (const run of symptom.affected) {
+          const entry = affected.get(run.runId) ?? { ...run, problems: [] };
+          entry.problems.push(symptom.id);
+          if (time(run.at) > time(entry.at)) entry.at = run.at;
+          affected.set(run.runId, entry);
+        }
+      }
+      const others = all.slice(1);
+      return {
+        ...main,
+        occurrences: all.reduce((total, symptom) => total + symptom.occurrences, 0),
+        runs: runIds.size,
+        lastSeen: all.reduce<Date | null>((latest, { lastSeen }) => (time(lastSeen) > time(latest) ? lastSeen : latest), null),
+        firstSeen: all.reduce<Date | null>((earliest, { firstSeen }) => (firstSeen && (!earliest || firstSeen < earliest) ? firstSeen : earliest), null),
+        failedAt: all.flatMap((symptom) => symptom.failedAt),
+        decisions: all.flatMap((symptom) => symptom.decisions),
+        members: all,
+        symptoms: members.map(({ symptom, via }) => ({
+          id: symptom.id,
+          problem: symptom.problem,
+          kind: symptom.kind,
+          toolName: symptom.toolName,
+          title: titles.get(symptom.id) ?? symptom.title,
+          sample: symptom.sample,
+          runs: symptom.runs,
+          occurrences: symptom.occurrences,
+          lastSeen: symptom.lastSeen,
+          via,
+        })),
+        affected: [...affected.values()].sort((a, b) => time(b.at) - time(a.at)).slice(0, AFFECTED_MAX),
+        related: others.length
+          ? `## The same cause also showed up as\n${others.map((s) => `- ${titles.get(s.id) ?? s.title}${s.toolName ? ` (${s.toolName})` : ""}, in ${s.runs} ${s.runs === 1 ? "run" : "runs"}: ${(s.sample ?? "").replace(/\s+/g, " ").slice(0, 300)}`).join("\n")}`
+          : undefined,
+      };
+    });
+    return { issues: entries.sort((a, b) => b.runs - a.runs || b.occurrences - a.occurrences), grouping };
   }
+
+  const findIssue = async (projectId: string, id: string) => (await allIssues(projectId)).issues.find((issue) => issue.id === id);
 
   app.get("/issues", async (c) => {
     const projectId = c.get("projectId");
@@ -420,14 +511,18 @@ export function apiRoutes(ctx: AppContext) {
     const autoDiagnose = project?.autoDiagnose ?? true;
     // Runs finished since the last look are checked for problems no step reported.
     await reviewer.scan(projectId, autoDiagnose);
-    const issues = await allIssues(projectId);
+    const { issues, grouping } = await allIssues(projectId);
     const ignored = new Set((await db.select({ issueId: ignoredIssues.issueId }).from(ignoredIssues).where(eq(ignoredIssues.projectId, projectId))).map((row) => row.issueId));
+    // Problems with one cause are joined first, so diagnoses go to what's left.
+    const open = issues.filter((issue) => !ignored.has(issue.id) && !grouping.get(issue.id)?.split);
+    const items = open.map((issue) => ({ harness: issue.harness, ids: issue.members.map((m) => m.id), title: issue.symptoms[0]!.title, toolName: issue.toolName, sample: issue.sample, runs: issue.runs, runId: issue.examples[0]?.runId ?? null }));
+    const joining = (autoDiagnose && linker.maybe(projectId, items, new Set(grouping.keys()))) || linker.busy(projectId);
     // Opening the Inbox starts diagnoses for recurring problems never diagnosed, up to the daily cap.
-    const diagnoses = await explainer.diagnoses(projectId, issues.slice(0, 200), { auto: autoDiagnose, ignored });
+    const diagnoses = await explainer.diagnoses(projectId, issues.slice(0, 200), { auto: autoDiagnose && !joining, ignored });
     const applied = await lessonsForIssues(db, projectId, issues.slice(0, 200).map((issue) => issue.id));
     const tests = await tester.latest(projectId, issues.slice(0, 200).map((issue) => issue.id));
     const shown = await Promise.all(
-      issues.map(async ({ failedAt, decisions: _decisions, evidence: _evidence, ...issue }) => {
+      issues.map(async ({ failedAt, decisions: _decisions, evidence: _evidence, runIds: _runIds, members: _members, related: _related, cause: _cause, ...issue }) => {
         const lesson = applied.get(issue.id);
         // A fix's results: this problem's failures, and the agent's runs, since it went live.
         const since = lesson?.status === "active" && lesson.deliveredAt ? new Date(lesson.deliveredAt) : null;
@@ -442,7 +537,8 @@ export function apiRoutes(ctx: AppContext) {
         };
       }),
     );
-    return c.json({ issues: shown, diagnosisModel: explainer.enabled ? ctx.ai?.model : null, autoDiagnose });
+    // While grouping, diagnoses wait: the dashboard asks again soon.
+    return c.json({ issues: shown, diagnosisModel: explainer.enabled ? ctx.ai?.model : null, autoDiagnose, grouping: joining || linker.busy(projectId) });
   });
 
   // Testing a fix: the decisions where it went wrong, replayed with it added. Nothing reaches an agent without a pass.
@@ -453,7 +549,7 @@ export function apiRoutes(ctx: AppContext) {
     const body = (await c.req.json().catch(() => ({}))) as { text?: unknown; apply?: unknown };
     const text = cleanLesson(body.text);
     if (!text) return c.json({ error: "Write the fix first." }, 400);
-    const issue = (await allIssues(projectId)).find((candidate) => candidate.id === c.req.param("id"));
+    const issue = await findIssue(projectId, c.req.param("id"));
     if (!issue) return c.json({ error: "That problem isn't in the Inbox anymore." }, 404);
     // Test & apply: a pass of the owner's own words goes to the agent at once. A rewrite waits for them to read it.
     const onPass =
@@ -469,7 +565,10 @@ export function apiRoutes(ctx: AppContext) {
       .where(and(eq(issueExplanations.projectId, projectId), eq(issueExplanations.issueId, issue.id), eq(issueExplanations.status, "ready")));
     const about = diagnosis?.title && diagnosis.why ? diagnosis : issue;
     const problem = [`${about.title}. ${about.why}`, issue.toolName && `The failing step: ${issue.toolName}.`, issue.sample && `The error: ${issue.sample.slice(0, 500)}`].filter(Boolean).join("\n");
-    const decisions = issue.problem === "error" ? await failingDecisions(ctx, projectId, issue) : issue.decisions;
+    // The main problem's decisions first, then a few of each other way it showed up, so one fix is tested on all.
+    const decisions = (
+      await Promise.all(issue.members.slice(0, 5).map((member) => (member.problem === "error" ? failingDecisions(ctx, projectId, member) : member.decisions)))
+    ).flat();
     return c.json({ fixTest: await tester.start(projectId, { issueId: issue.id, problem, decisions }, text, onPass) });
   });
 
@@ -478,13 +577,28 @@ export function apiRoutes(ctx: AppContext) {
     if (!(c.req.header("content-type") ?? "").includes("application/json")) return c.json({ error: "Send JSON" }, 415);
     const projectId = c.get("projectId");
     const issueId = c.req.param("id");
+    // All the ways it showed up, so it stays ignored whichever one leads it.
+    const ids = (await findIssue(projectId, issueId))?.members.map((member) => member.id) ?? [];
     if (c.req.param("action") === "restore") {
-      await db.delete(ignoredIssues).where(and(eq(ignoredIssues.projectId, projectId), eq(ignoredIssues.issueId, issueId)));
+      await db.delete(ignoredIssues).where(and(eq(ignoredIssues.projectId, projectId), inArray(ignoredIssues.issueId, [issueId, ...ids])));
       return c.json({ ignored: false });
     }
-    if (!(await allIssues(projectId)).some((issue) => issue.id === issueId)) return c.json({ error: "That problem isn't in the Inbox anymore." }, 404);
-    await db.insert(ignoredIssues).values({ projectId, issueId }).onConflictDoNothing();
+    if (!ids.length) return c.json({ error: "That problem isn't in the Inbox anymore." }, 404);
+    await db.insert(ignoredIssues).values(ids.map((id) => ({ projectId, issueId: id }))).onConflictDoNothing();
     return c.json({ ignored: true });
+  });
+
+  // "Not the same problem": one way a cause showed up is its own problem; it leaves the entry for good.
+  app.post("/issues/:id/split", async (c) => {
+    if (!(c.req.header("content-type") ?? "").includes("application/json")) return c.json({ error: "Send JSON" }, 415);
+    const projectId = c.get("projectId");
+    const issueId = c.req.param("id");
+    const { issues } = await allIssues(projectId);
+    if (!issues.some((issue) => issue.members.length > 1 && issue.members.some((member) => member.id === issueId))) {
+      return c.json({ error: "That problem isn't grouped with others anymore." }, 404);
+    }
+    await linker.split(projectId, issueId);
+    return c.json({ split: true });
   });
 
   // The Inbox's switch for diagnosing recurring problems without a click.
@@ -501,7 +615,7 @@ export function apiRoutes(ctx: AppContext) {
     const projectId = c.get("projectId");
     const text = cleanLesson(((await c.req.json().catch(() => ({}))) as { text?: unknown }).text);
     if (!text) return c.json({ error: "Write the lesson first." }, 400);
-    const issue = (await allIssues(projectId)).find((candidate) => candidate.id === c.req.param("id"));
+    const issue = await findIssue(projectId, c.req.param("id"));
     if (!issue) return c.json({ error: "That problem isn't in the Inbox anymore." }, 404);
     if (!LESSON_HARNESSES.has(issue.harness)) return c.json({ error: `Lucid can't apply lessons in ${issue.harness} yet. Copy it into the agent's instructions instead.` }, 409);
     if (!(await tester.passed(projectId, issue.id, text))) return c.json({ error: UNTESTED }, 409);
@@ -527,7 +641,7 @@ export function apiRoutes(ctx: AppContext) {
     if (!(c.req.header("content-type") ?? "").includes("application/json")) return c.json({ error: "Send JSON" }, 415);
     if (!explainer.enabled) return c.json({ error: "Diagnoses need a model key: set BASETEN_API_KEY for the Lucid server." }, 409);
     const projectId = c.get("projectId");
-    const issue = (await allIssues(projectId)).find((candidate) => candidate.id === c.req.param("id"));
+    const issue = await findIssue(projectId, c.req.param("id"));
     if (!issue) return c.json({ error: "That problem isn't in the Inbox anymore." }, 404);
     return c.json({ diagnosis: explainer.request(projectId, issue) });
   });

@@ -8,12 +8,19 @@ import { ensureDefaultProject } from "../src/keys";
 import { LiveHub } from "../src/live";
 import { CHECKS_PER_DAY } from "../src/review";
 
-type Issue = { id: string; problem: string; toolName: string | null; harness: string; runs: number; title: string; sample: string | null; examples: { runId: string }[] };
+type Symptom = { id: string; problem: string; toolName: string | null; runs: number; title: string; sample: string | null; via: string };
+type Issue = { id: string; problem: string; toolName: string | null; harness: string; runs: number; title: string; sample: string | null; examples: { runId: string }[]; symptoms: Symptom[] };
 type Step = Partial<typeof schema.steps.$inferInsert> & { kind: string };
 
-async function setup(chat?: ChatClient) {
+/** The entry a kind of problem ended up in: its own, or the failure it came after. */
+const holding = (all: Issue[], problem: string) => all.filter((issue) => issue.symptoms.some((symptom) => symptom.problem === problem));
+
+async function setup(checker?: ChatClient) {
   const { db } = await openDb();
   const projectId = await ensureDefaultProject(db);
+  // The pass that joins problems with one cause finds none here; the model sees only checks.
+  const chat: ChatClient | undefined =
+    checker && (async (request) => (String(request.messages[0]?.content).startsWith("You sort an AI agent's problems") ? { text: '{"groups": []}', latencyMs: 1 } : checker(request)));
   const ctx: AppContext = {
     db,
     live: new LiveHub(),
@@ -63,16 +70,31 @@ async function until<T>(read: () => Promise<T>, ok: (value: T) => boolean) {
 describe("problems no step reported", () => {
   it("finds an agent repeating the same call to no effect, grouped by the tool it repeats", async () => {
     const { issues, run } = await setup();
-    await run({}, looping(4));
-    await run({ name: "Run the tests again" }, looping(3));
+    const same = (tool: string): Step[] => [{ kind: "llm" }, ...[1, 2, 3].map(() => ({ kind: "tool", toolName: tool, inputHash: "status", outputHash: "pending", inputPreview: "check the job" }))];
+    await run({}, same("jobs"));
+    await run({ name: "Is it done yet" }, same("jobs"));
     // Not loops: twice only, or the same call getting somewhere different each time.
-    await run({}, looping(2));
+    await run({}, same("jobs").slice(0, 3));
     await run({}, [{ kind: "llm" }, ...[1, 2, 3].map((i) => ({ kind: "tool", toolName: "terminal", inputHash: "tail", outputHash: `out-${i}`, inputPreview: "tail log" }))]);
 
     const loops = (await issues()).filter((i) => i.problem === "loop");
     expect(loops).toHaveLength(1);
-    expect(loops[0]).toMatchObject({ toolName: "terminal", harness: "hermes", runs: 2, title: "Stuck repeating terminal" });
-    expect(loops[0]!.sample).toMatch(/It called terminal 3 times with the same input and it failed every time: \{"command": "npm test"\}/);
+    expect(loops[0]).toMatchObject({ toolName: "jobs", harness: "hermes", runs: 2, title: "Stuck repeating jobs" });
+    expect(loops[0]!.sample).toMatch(/It called jobs 3 times with the same input and got the same result every time: check the job/);
+  });
+
+  it("puts a loop of failing calls with the failure it repeats: one cause, one entry", async () => {
+    const { issues, run } = await setup();
+    await run({}, looping(4));
+    await run({ name: "Run the tests again" }, looping(3));
+    await run({}, looping(2));
+
+    const all = await issues();
+    expect(all).toHaveLength(1);
+    expect(all[0]).toMatchObject({ problem: "error", toolName: "terminal", runs: 3 });
+    const loop = all[0]!.symptoms.find((s) => s.problem === "loop")!;
+    expect(loop).toMatchObject({ toolName: "terminal", runs: 2, title: "Stuck repeating terminal", via: "run" });
+    expect(loop.sample).toMatch(/It called terminal 3 times with the same input and it failed every time: \{"command": "npm test"\}/);
   });
 
   it("flags a run costing far more than that agent usually does, once it knows what's usual", async () => {
@@ -117,7 +139,10 @@ describe("problems no step reported", () => {
 
     const found = await issues();
     expect(found.find((i) => i.problem === "refusal")).toMatchObject({ title: "Gave up on a task it could do", runs: 1 });
-    expect(found.find((i) => i.problem === "wrong_answer")!.sample).toContain("The page was reachable with the browser tool.");
+    // The wrong answer came after a failed step, so it's in that failure's entry.
+    const [failure] = holding(found, "wrong_answer");
+    expect(failure).toMatchObject({ problem: "error", toolName: "terminal" });
+    expect(failure!.symptoms.find((s) => s.problem === "wrong_answer")!.sample).toContain("The page was reachable with the browser tool.");
     // The model named step 1, a model call: that's the decision a fix test replays.
     expect(checked.find((r) => r.kind === "refusal" && r.status === "confirmed")!.stepId).toBe(`run-1-s0`);
     expect(projectId).toBeTruthy();
@@ -149,7 +174,8 @@ describe("problems no step reported", () => {
     const { call, issues, run } = await setup(async () => ({ text: "{}", latencyMs: 1 }));
     await run({}, looping(3));
     await run({}, looping(3));
-    const loop = (await issues()).find((i) => i.problem === "loop")!;
+    const [loop] = holding(await issues(), "loop");
+    if (!loop) throw new Error("no loop found");
     expect((await call("POST", `/api/issues/${loop.id}/test`, { text: "Stop after the same failure twice." })).status).toBe(200);
     const done = await until(issues, (all) => (all.find((i) => i.id === loop.id) as unknown as { fixTest: { status: string } }).fixTest.status !== "running");
     // These decisions recorded no request, so there's nothing to replay; it says so instead of guessing.

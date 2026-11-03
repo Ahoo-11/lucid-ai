@@ -196,6 +196,28 @@ export type Overview = {
 /** What went wrong: a step that failed, or something Lucid found in a run that no step reported. */
 export type ProblemKind = "error" | "loop" | "cost" | "refusal" | "wrong_answer";
 
+/**
+ * One way a cause showed up. How it's known to be the same cause: it's the
+ * main one, the same error in another tool, a kind of failure whose words
+ * don't matter, it came after the failure in its run, or the model said so.
+ */
+export type Symptom = {
+  id: string;
+  problem: ProblemKind;
+  kind: StepKind;
+  toolName: string | null;
+  title: string;
+  sample: string | null;
+  runs: number;
+  occurrences: number;
+  lastSeen: string | null;
+  via: "root" | "words" | "rule" | "run" | "model";
+};
+
+/** A run the cause broke, and which of its symptoms showed up in it. */
+export type AffectedRun = { runId: string; runName: string | null; at: string | null; problems: string[] };
+
+/** One Inbox entry: a root cause, with what it caused. Its own fields are its main problem's, with every symptom's runs counted. */
 export type Issue = {
   id: string;
   problem: ProblemKind;
@@ -224,6 +246,10 @@ export type Issue = {
   ignored: boolean;
   /** The latest test of a fix for it: a fix is applied only after its exact words pass. */
   fixTest: FixTest | null;
+  /** Every way this cause showed up, main one first. */
+  symptoms: Symptom[];
+  /** The runs it broke, newest first (up to 50). */
+  affected: AffectedRun[];
 };
 
 /** One past decision replayed with the fix: did the agent avoid the problem? */
@@ -422,10 +448,13 @@ export const api = {
   run: (id: string) => request<RunDetail>(`/runs/${id}`),
   runContext: (id: string) => request<ContextBreakdown>(`/runs/${id}/context`),
   usage: (days: number) => request<Usage>(`/usage?days=${days}`),
-  issues: () => request<{ issues: Issue[]; diagnosisModel?: string | null; autoDiagnose: boolean }>("/issues"),
+  /** grouping: the model is joining new problems that share a cause; diagnoses wait for it. */
+  issues: () => request<{ issues: Issue[]; diagnosisModel?: string | null; autoDiagnose: boolean; grouping?: boolean }>("/issues"),
   /** Takes a problem out of the Inbox (or brings it back). */
   ignoreIssue: (issueId: string, ignore: boolean) =>
     request<{ ignored: boolean }>(`/issues/${encodeURIComponent(issueId)}/${ignore ? "ignore" : "restore"}`, { method: "POST", body: "{}" }),
+  /** "Not the same problem": one way a cause showed up gets its own entry, for good. */
+  splitIssue: (symptomId: string) => request<{ split: boolean }>(`/issues/${encodeURIComponent(symptomId)}/split`, { method: "POST", body: "{}" }),
   setAutoDiagnose: (on: boolean) => request<{ autoDiagnose: boolean }>(`/settings/auto-diagnose/${on ? "on" : "off"}`, { method: "POST", body: "{}" }),
   /** Asks the model to diagnose one problem; spends credits, so only on a click. */
   diagnose: (issueId: string) => request<{ diagnosis: Diagnosis }>(`/issues/${encodeURIComponent(issueId)}/diagnose`, { method: "POST", body: "{}" }),

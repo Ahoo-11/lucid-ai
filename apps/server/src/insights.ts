@@ -4,10 +4,21 @@
 
 export type Hint = { title: string; why: string; fix: string };
 
-type Rule = { test: RegExp; hint: (tool: string) => Hint };
+/**
+ * When failures this rule matches have one cause whatever their exact words:
+ * for the whole agent (its quota), for the agent's model calls (a rejected
+ * key, an unreachable API), or per tool (the same tool timing out). "never":
+ * not even the same words in another tool (people stopping the agent decide
+ * each time). Unset: the same words in several tools are one cause.
+ */
+type Join = "agent" | "model" | "tool" | "never";
+
+type Rule = { id: string; join?: Join; test: RegExp; hint: (tool: string) => Hint };
 
 const RULES: Rule[] = [
   {
+    id: "quota",
+    join: "agent",
     test: /session limit|usage limit|hit your (\w+ )?limit|quota exceeded|insufficient_quota|credit balance/i,
     hint: () => ({
       title: "The agent ran out of usage quota",
@@ -16,7 +27,9 @@ const RULES: Rule[] = [
     }),
   },
   {
-    test: /HTTP 401|HTTP 403|unauthori[sz]ed|invalid (api )?key|incorrect api key|user not found|authentication (failed|error)/i,
+    id: "auth",
+    join: "model",
+    test: /HTTP 401|HTTP 403|unauthori[sz]ed|invalid (api )?key|incorrect api key|user not found|authentication (failed|error)|missing authentication/i,
     hint: () => ({
       title: "The model provider rejected the API key",
       why: "The provider refused the agent's credentials, so no model call succeeded and the run stopped immediately.",
@@ -24,7 +37,9 @@ const RULES: Rule[] = [
     }),
   },
   {
-    test: /ENOTFOUND|ECONNRESET|ECONNREFUSED|EAI_AGAIN|connection error|can't reach the api|socket hang up|network/i,
+    id: "network",
+    join: "model",
+    test: /ENOTFOUND|ECONNRESET|ECONNREFUSED|EAI_AGAIN|connection (error|lost|dropped|refused)|can't reach the api|no response from (the )?api|socket hang up|network/i,
     hint: () => ({
       title: "The agent lost its connection to the model API",
       why: "Requests to the model provider failed at the network level. The harness retries these, but each retry adds delay.",
@@ -32,6 +47,7 @@ const RULES: Rule[] = [
     }),
   },
   {
+    id: "missing-command",
     test: /command not found|is not recognized as (an internal|the name of a cmdlet)|not found in path/i,
     hint: (tool) => ({
       title: `${tool} ran a command that isn't installed`,
@@ -40,6 +56,7 @@ const RULES: Rule[] = [
     }),
   },
   {
+    id: "unread",
     test: /has not been read yet|read it first|must read/i,
     hint: (tool) => ({
       title: `${tool} edited a file it hadn't read`,
@@ -48,6 +65,7 @@ const RULES: Rule[] = [
     }),
   },
   {
+    id: "stale-edit",
     test: /string to replace not found|old_string|no match(es)? found|did not match/i,
     hint: (tool) => ({
       title: `${tool} couldn't find the text it wanted to replace`,
@@ -56,6 +74,7 @@ const RULES: Rule[] = [
     }),
   },
   {
+    id: "permission",
     test: /permission|denied|not allowed|blocked by|EACCES|EPERM/i,
     hint: (tool) => ({
       title: `${tool} was blocked by permissions`,
@@ -64,6 +83,8 @@ const RULES: Rule[] = [
     }),
   },
   {
+    id: "timeout",
+    join: "tool",
     test: /timed? ?out|timeout|ETIMEDOUT|deadline exceeded/i,
     hint: (tool) => ({
       title: `${tool} timed out`,
@@ -72,6 +93,8 @@ const RULES: Rule[] = [
     }),
   },
   {
+    id: "rate-limit",
+    join: "model",
     test: /\b429\b|rate.?limit|overloaded|\b529\b/i,
     hint: () => ({
       title: "The model provider rate-limited the agent",
@@ -80,6 +103,7 @@ const RULES: Rule[] = [
     }),
   },
   {
+    id: "missing-file",
     test: /no such file|ENOENT|does not exist|cannot find (the )?(path|file)/i,
     hint: (tool) => ({
       title: `${tool} looked for a file that isn't there`,
@@ -88,7 +112,9 @@ const RULES: Rule[] = [
     }),
   },
   {
-    test: /interrupted by the user|user (rejected|declined|denied)/i,
+    id: "stopped",
+    join: "never",
+    test: /interrupted by the user|user (rejected|declined|denied)|doesn't want to proceed/i,
     hint: (tool) => ({
       title: `You stopped ${tool}`,
       why: "A person rejected or interrupted this action, which usually means the agent was heading the wrong way.",
@@ -96,6 +122,7 @@ const RULES: Rule[] = [
     }),
   },
   {
+    id: "exit-code",
     test: /exit code [1-9]|exited with|non-zero|failed with code/i,
     hint: (tool) => ({
       title: `${tool} commands are failing`,
@@ -105,15 +132,34 @@ const RULES: Rule[] = [
   },
 ];
 
+const ruleFor = (error: string | null) => RULES.find((rule) => rule.test.test(error ?? ""));
+
 export function hintFor(tool: string | null, kind: string, error: string | null): Hint {
   const name = prettyTool(tool) ?? (kind === "llm" || kind === "error" ? "The model API" : "A step");
-  const text = error ?? "";
-  for (const rule of RULES) if (rule.test.test(text)) return rule.hint(name);
+  const rule = ruleFor(error);
+  if (rule) return rule.hint(name);
   return {
     title: `${name} failed`,
     why: "This step reported an error.",
     fix: "Open an example run to see what the agent did before and after the failure.",
   };
+}
+
+/**
+ * What failures with one cause share, whatever their words (see Join): the
+ * agent's quota, its model calls being refused or unreachable, one tool timing
+ * out. Null when the words matter.
+ */
+export function causeKey(failure: { toolName: string | null; harness: string; sample: string | null }) {
+  const rule = ruleFor(failure.sample);
+  if (!rule?.join || rule.join === "never") return null;
+  if (rule.join === "agent" || !failure.toolName) return `agent\u0000${failure.harness}\u0000${rule.id}`;
+  return rule.join === "tool" ? `tool\u0000${failure.toolName}\u0000${rule.id}` : null;
+}
+
+/** Whether the same words failing in another tool are the same cause: specific words, not "Exit code 1". */
+export function sharesWords(failure: { signature: string; sample: string | null }) {
+  return ruleFor(failure.sample)?.join !== "never" && failure.signature.length >= 24 && /[a-z]{3,}\W+[a-z]{3,}\W+[a-z]{3,}/i.test(failure.signature);
 }
 
 /** "mcp__Claude_Browser__computer" → "computer (Claude_Browser)": MCP names are long and repetitive. */
@@ -128,6 +174,7 @@ export function errorSignature(error: string | null) {
     .split(/\r?\n/)[0]!
     .replace(/\b\d{1,2}(:\d{2})?\s*(am|pm)\b/gi, "<time>")
     .replace(/\((?:[A-Z][a-z]+\/[A-Za-z_]+|UTC[^)]*)\)/g, "")
+    .replace(/\b[a-z][a-z\d+.-]*:\/\/[^\s'"<>)\]]+/gi, "<url>")
     .replace(/[A-Za-z]:\\[^\s'"]+|\/[\w.-]+(\/[\w.-]+)+/g, "<path>")
     .replace(/\b[0-9a-f]{8,}\b/gi, "<id>")
     .replace(/\d+/g, "N")

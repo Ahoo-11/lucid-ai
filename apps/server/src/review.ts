@@ -6,7 +6,8 @@
 // rules (and a few runs that look fine are spot-checked); the model checks
 // each one, within CHECKS_PER_DAY and only with auto-diagnose on, and
 // confirms or clears it. Confirmed findings are grouped like failed steps and
-// become Inbox problems, with the same diagnosis, fix test and fix tracking.
+// become Inbox problems, with the same diagnosis, fix test and fix tracking;
+// one that came after a failed step joins that failure's entry (see roots.ts).
 
 import { createHash } from "node:crypto";
 import { and, asc, count, desc, eq, gt, gte, inArray, isNotNull, isNull, lte, ne, or, sql } from "drizzle-orm";
@@ -142,11 +143,22 @@ export type FindingIssue = Hint & {
   lastSeen: Date | null;
   firstSeen: Date | null;
   examples: { runId: string; runName: string | null }[];
+  /** Every run it happened in, and the newest AFFECTED_MAX of them to list. */
+  runIds: string[];
+  affected: { runId: string; runName: string | null; at: Date | null }[];
   /** When each one happened, to count the ones after a fix went live. */
   failedAt: number[];
   /** Where it went wrong in each example run, newest first: what a fix test replays. */
   decisions: string[];
+  /** The failed step's problem it came after, when it did: the failure caused it. */
+  cause: string | null;
 };
+
+/** The runs an Inbox problem lists, newest first. */
+export const AFFECTED_MAX = 50;
+
+/** Which failed step's problem, if any, a finding in a run came after: by the caller, who knows the failures. */
+export type CauseOf = (finding: { runId: string; kind: Finding; subject: string }) => string | null;
 
 /** The same runs are spot-checked every time: picked by their id, not by chance. */
 const spotCheck = (runId: string) => Number.parseInt(createHash("sha1").update(runId).digest("hex").slice(0, 8), 16) % 1000 < SPOT_CHECK_SHARE * 1000;
@@ -431,8 +443,11 @@ export function createReviewer(ctx: AppContext) {
       if (auto && enabled) await checkSuspects(projectId);
     },
 
-    /** Confirmed findings, grouped like failed steps: by kind, agent, and the tool a loop repeats or the task. */
-    async issues(projectId: string): Promise<FindingIssue[]> {
+    /**
+     * Confirmed findings, grouped like failed steps: by kind, agent, and the
+     * failure they came after, or else the tool a loop repeats or the task.
+     */
+    async issues(projectId: string, causeOf: CauseOf = () => null): Promise<FindingIssue[]> {
       const rows = await ctx.db
         .select({
           runId: runFindings.runId,
@@ -453,7 +468,9 @@ export function createReviewer(ctx: AppContext) {
       const groups = new Map<string, Omit<FindingIssue, "id" | keyof Hint> & { key: string; subject: string }>();
       for (const row of rows) {
         const kind = row.kind as Finding;
-        const key = `finding\u0000${kind}\u0000${row.harness}\u0000${row.subject}`;
+        // Cost spikes have no one step to blame.
+        const cause = kind === "cost" ? null : causeOf({ runId: row.runId, kind, subject: row.subject });
+        const key = `finding\u0000${kind}\u0000${row.harness}\u0000${cause ? `after\u0000${cause}` : row.subject}`;
         const group = groups.get(key) ?? {
           key,
           subject: row.subject,
@@ -469,11 +486,16 @@ export function createReviewer(ctx: AppContext) {
           lastSeen: row.startedAt,
           firstSeen: row.startedAt,
           examples: [],
+          runIds: [],
+          affected: [],
           failedAt: [],
           decisions: [],
+          cause,
         };
         group.occurrences++;
         group.runs++;
+        group.runIds.push(row.runId);
+        if (group.affected.length < AFFECTED_MAX) group.affected.push({ runId: row.runId, runName: row.runName, at: row.startedAt });
         if (row.startedAt) {
           group.failedAt.push(row.startedAt.getTime());
           if (!group.firstSeen || row.startedAt < group.firstSeen) group.firstSeen = row.startedAt;

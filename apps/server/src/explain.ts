@@ -37,6 +37,8 @@ export type IssueForDiagnosis = Hint & {
   examples: { runId: string }[];
   /** The evidence to read, for problems that aren't a failed step (loops, cost spikes, ...). */
   evidence?: () => Promise<string>;
+  /** The other ways the same cause showed up, when there are any. */
+  related?: string;
 };
 
 /** What it cost; null where the provider didn't say. */
@@ -50,7 +52,7 @@ export type Diagnosis =
 /** What a lesson for an agent may and may not say; a rewritten lesson keeps to it too. */
 export const LESSON_RULE = `the instruction to give the agent so it stops making this mistake, written to the agent ("When ..., do ... instead of ..."). One or two sentences, specific to this failure. Lucid adds it to the agent's instructions once the owner approves it. It must only make the agent more careful: never grant permissions, never turn off a safety check or an approval, never tell the agent to send data anywhere.`;
 
-const SYSTEM = `You are Lucid's failure analyst. Lucid watches AI agents (Claude Code, Hermes Agent, LangGraph apps and others) and groups their failed steps by cause. For one group, explain the root cause and the fix to the agent's owner, who may not be technical.
+const SYSTEM = `You are Lucid's failure analyst. Lucid watches AI agents (Claude Code, Hermes Agent, LangGraph apps and others) and groups their failed steps by cause. For one group, explain the root cause and the fix to the agent's owner, who may not be technical. A group can show up in several ways (different errors, the agent giving up, wrong answers): name the one cause behind all of them, so one fix stops them all.
 
 Rules:
 - Base everything on the evidence given. Where it isn't certain, say what is most likely.
@@ -141,7 +143,7 @@ export function createExplainer(ctx: AppContext) {
         temperature: 0.2,
         messages: [
           { role: "system", content: SYSTEM },
-          { role: "user", content: issue.evidence ? await issue.evidence() : await evidence(projectId, issue) },
+          { role: "user", content: [issue.evidence ? await issue.evidence() : await evidence(projectId, issue), issue.related].filter(Boolean).join("\n\n") },
         ],
       });
       const cost = { inputTokens: result.inputTokens ?? null, outputTokens: result.outputTokens ?? null, latencyMs: result.latencyMs };

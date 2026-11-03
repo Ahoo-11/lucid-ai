@@ -12,28 +12,61 @@ import { cx } from "../ui";
 
 /** device: one command plus a click on Approve (connect.sh / connect.ps1). */
 type Method = "device" | "proxy" | "otel";
-export type AgentChoice = { id: string; name: string; brand?: Brand; method: Method };
+type Group = "agent" | "model" | "framework";
+export type AgentChoice = {
+  id: string;
+  name: string;
+  brand?: Brand;
+  method: Method;
+  group?: Group;
+  /** Your own code calling this provider, so there's no "which AI" step. */
+  provider?: string;
+  /** Shown but not pickable yet; says why. */
+  soon?: string;
+};
 
 /** Each agent goes the simplest way that captures it today. */
 const AGENT_CHOICES: AgentChoice[] = [
-  { id: "claude-code", name: "Claude Code", brand: BRANDS.claudeCode, method: "device" },
-  { id: "hermes", name: "Hermes Agent", brand: BRANDS.hermes, method: "device" },
-  { id: "langgraph", name: "LangGraph", brand: BRANDS.langgraph, method: "proxy" },
-  { id: "langchain", name: "LangChain", brand: BRANDS.langchain, method: "proxy" },
-  { id: "crewai", name: "CrewAI", brand: BRANDS.crewai, method: "proxy" },
-  { id: "pydantic-ai", name: "Pydantic AI", brand: BRANDS.pydanticai, method: "proxy" },
+  { id: "claude-code", name: "Claude Code", brand: BRANDS.claudeCode, method: "device", group: "agent" },
+  { id: "hermes", name: "Hermes Agent", brand: BRANDS.hermes, method: "device", group: "agent" },
+  { id: "openclaw", name: "OpenClaw", brand: BRANDS.openclaw, method: "proxy", group: "agent" },
+  // All run on their maker's own computers, which don't let anyone else see the runs yet.
+  { id: "grok-bot", name: "Grok Bot", brand: BRANDS.grokbot, method: "proxy", group: "agent", soon: "Grok Bot runs on xAI's computers, which don't share its runs yet." },
+  { id: "muse", name: "Muse", brand: BRANDS.muse, method: "proxy", group: "agent", soon: "Muse runs on Meta's computers, which don't share its runs yet." },
+  { id: "dots", name: "OpenAI Dots", brand: BRANDS.dots, method: "proxy", group: "agent", soon: "Dots run on OpenAI's computers, which don't share their runs yet." },
+  { id: "baseten", name: "Muse Spark", brand: BRANDS.meta, method: "proxy", group: "model", provider: "baseten" },
+  { id: "openai", name: "OpenAI", brand: BRANDS.openai, method: "proxy", group: "model", provider: "openai" },
+  { id: "anthropic", name: "Anthropic", brand: BRANDS.anthropic, method: "proxy", group: "model", provider: "anthropic" },
+  { id: "gemini", name: "Gemini", brand: BRANDS.gemini, method: "proxy", group: "model", provider: "gemini" },
+  { id: "openrouter", name: "OpenRouter", brand: BRANDS.openrouter, method: "proxy", group: "model", provider: "openrouter" },
+  // The rest of the providers, and any agent not listed: the proxy, after "which AI".
+  { id: "custom", name: "Another one", method: "proxy", group: "model" },
+  { id: "langgraph", name: "LangGraph", brand: BRANDS.langgraph, method: "proxy", group: "framework" },
+  { id: "langchain", name: "LangChain", brand: BRANDS.langchain, method: "proxy", group: "framework" },
+  { id: "crewai", name: "CrewAI", brand: BRANDS.crewai, method: "proxy", group: "framework" },
+  { id: "pydantic-ai", name: "Pydantic AI", brand: BRANDS.pydanticai, method: "proxy", group: "framework" },
   // Both call OpenAI's Responses API, which the proxy doesn't record, so they use tracing.
-  { id: "openai-agents", name: "OpenAI Agents SDK", brand: BRANDS.openai, method: "otel" },
-  { id: "vercel-ai", name: "Vercel AI SDK", brand: BRANDS.vercel, method: "otel" },
-  { id: "custom", name: "Something else", method: "proxy" },
+  { id: "openai-agents", name: "OpenAI Agents SDK", brand: BRANDS.openai, method: "otel", group: "framework" },
+  { id: "vercel-ai", name: "Vercel AI SDK", brand: BRANDS.vercel, method: "otel", group: "framework" },
 ];
+
+const GROUPS: { id: Group; label: string; hint: string }[] = [
+  { id: "agent", label: "AI agents", hint: "Ready-made agents you talk to." },
+  { id: "model", label: "Models", hint: "Your own code that calls a model." },
+  { id: "framework", label: "Frameworks", hint: "Agents you build with a framework." },
+];
+
+/** Goes through the proxy without knowing which AI yet. */
+const asksProvider = (agent: AgentChoice) => agent.method === "proxy" && !agent.provider;
+/** Code the owner wrote, rather than a named agent or framework. */
+const ownCode = (agent: AgentChoice) => agent.id === "custom" || !!agent.provider;
 const OTEL_CHOICE: AgentChoice = { id: "otel", name: "OpenTelemetry", brand: BRANDS.otel, method: "otel" };
 
 /** For /connect?agent=…, including the older method names (proxy, otel). */
 export function findAgent(id: string | null) {
   if (id === "proxy") return AGENT_CHOICES.find((agent) => agent.id === "custom")!;
   if (id === "otel") return OTEL_CHOICE;
-  return AGENT_CHOICES.find((agent) => agent.id === id) ?? null;
+  return AGENT_CHOICES.find((agent) => agent.id === id && !agent.soon) ?? null;
 }
 
 /** Where agents send, and the key that goes with it. */
@@ -58,7 +91,7 @@ function toTarget(status: ConnectStatus, key: string | null): Target {
 }
 
 /** Keys are named after the agent they were made for, so the key list reads like a list of agents. */
-const keyName = (agent: AgentChoice) => (agent.id === "custom" ? "My agent" : agent.name);
+const keyName = (agent: AgentChoice) => (ownCode(agent) ? "My agent" : agent.name);
 
 /** Changes whenever anything new arrives. */
 const fingerprint = (status: ConnectStatus) =>
@@ -116,8 +149,8 @@ function Wizard({ initialAgent, newKey, onKey, close }: { initialAgent: AgentCho
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [agent, setAgent] = useState(initialAgent);
-  const [provider, setProvider] = useState<string | null>(null);
-  const [step, setStep] = useState<Step>(initialAgent ? (initialAgent.method === "proxy" ? "provider" : "setup") : "agent");
+  const [provider, setProvider] = useState<string | null>(initialAgent?.provider ?? null);
+  const [step, setStep] = useState<Step>(initialAgent ? (asksProvider(initialAgent) ? "provider" : "setup") : "agent");
   const status = useQuery({ queryKey: ["connect"], queryFn: api.connect, refetchInterval: step === "setup" ? 2_000 : false });
 
   // What had arrived when the setup was shown, so only something new counts.
@@ -147,13 +180,14 @@ function Wizard({ initialAgent, newKey, onKey, close }: { initialAgent: AgentCho
     }
   }, [needsKey, agent, createKey]);
 
-  const flow: Step[] = agent && agent.method !== "proxy" ? ["agent", "setup"] : ["agent", "provider", "setup"];
+  const flow: Step[] = agent && !asksProvider(agent) ? ["agent", "setup"] : ["agent", "provider", "setup"];
   const position = step === "done" ? flow.length : flow.indexOf(step);
   const back = step === "provider" || step === "setup" ? () => setStep(flow[flow.indexOf(step) - 1] ?? "agent") : null;
 
   const pickAgent = (picked: AgentChoice) => {
     setAgent(picked);
-    setStep(picked.method === "proxy" ? "provider" : "setup");
+    setProvider(picked.provider ?? null);
+    setStep(asksProvider(picked) ? "provider" : "setup");
   };
   const restart = () => {
     setAgent(null);
@@ -259,31 +293,41 @@ function AgentMark({ agent, className = "size-7" }: { agent: AgentChoice; classN
   return agent.brand ? <BrandMark brand={agent.brand} className={className} /> : <Braces className={cx("text-zinc-500 dark:text-zinc-400", className)} strokeWidth={1.75} />;
 }
 
-function Tile({ label, onClick, small, children }: { label: string; onClick: () => void; small?: boolean; children: ReactNode }) {
+/** `soon`: shown greyed with a "Coming soon" tag, and says why on hover. */
+function Tile({ label, onClick, small, soon, children }: { label: string; onClick: () => void; small?: boolean; soon?: string; children: ReactNode }) {
   return (
     <button
       type="button"
-      onClick={onClick}
+      onClick={soon ? undefined : onClick}
+      aria-disabled={soon ? true : undefined}
+      title={soon}
       className={cx(
-        "group flex flex-col items-center rounded-2xl text-center ring-1 ring-zinc-200 transition hover:-translate-y-0.5 hover:bg-zinc-50 hover:ring-zinc-300 focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:outline-none dark:ring-white/10 dark:hover:bg-white/[0.04] dark:hover:ring-white/25 dark:focus-visible:ring-brand-300",
+        "group flex flex-col items-center justify-center rounded-2xl text-center ring-1 ring-zinc-200 transition focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:outline-none dark:ring-white/10 dark:focus-visible:ring-brand-300",
+        soon ? "cursor-default" : "hover:-translate-y-0.5 hover:bg-zinc-50 hover:ring-zinc-300 dark:hover:bg-white/[0.04] dark:hover:ring-white/25",
         small ? "gap-2 px-1.5 py-3" : "gap-3 px-2 py-4 sm:py-5",
       )}
     >
-      <LogoWell size={small ? "size-10 rounded-lg" : "size-12 rounded-xl"} className="transition group-hover:shadow-md">
+      <LogoWell size={small ? "size-10 rounded-lg" : "size-12 rounded-xl"} className={cx("transition", soon ? "opacity-50 grayscale" : "group-hover:shadow-md")}>
         {children}
       </LogoWell>
-      <span className={cx("leading-tight font-medium", small ? "text-xs" : "text-sm")}>{label}</span>
+      <span className={cx("leading-tight font-medium", small ? "text-xs" : "text-sm", soon && "text-zinc-400 dark:text-zinc-500")}>{label}</span>
+      {soon && <span className="-mt-1 rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-medium whitespace-nowrap text-zinc-500 dark:bg-white/10 dark:text-zinc-400">Coming soon</span>}
     </button>
   );
 }
 
 function AgentStep({ onPick }: { onPick: (agent: AgentChoice) => void }) {
+  const [group, setGroup] = useState<Group>("agent");
   return (
     <>
       <Heading title="Which agent do you want to watch?" sub="Pick one. You can connect more later." />
-      <div className="mt-6 grid grid-cols-3 gap-2 sm:gap-3">
-        {AGENT_CHOICES.map((agent) => (
-          <Tile key={agent.id} label={agent.name} onClick={() => onPick(agent)}>
+      <div className="mt-6">
+        <Segmented label="Kind of agent" value={group} onChange={setGroup} options={GROUPS.map(({ id, label }) => ({ id, label }))} />
+      </div>
+      <p className="mt-3 text-sm text-zinc-500 dark:text-zinc-400">{GROUPS.find((g) => g.id === group)?.hint}</p>
+      <div key={group} className="mt-3 grid auto-rows-fr grid-cols-3 gap-2 motion-safe:animate-[rise_.25s_ease-out] sm:gap-3">
+        {AGENT_CHOICES.filter((agent) => agent.group === group).map((agent) => (
+          <Tile key={agent.id} label={agent.name} soon={agent.soon} onClick={() => onPick(agent)}>
             <AgentMark agent={agent} />
           </Tile>
         ))}
@@ -301,7 +345,10 @@ function AgentStep({ onPick }: { onPick: (agent: AgentChoice) => void }) {
 function ProviderStep({ agent, providers, onPick }: { agent: AgentChoice; providers: string[]; onPick: (provider: string) => void }) {
   return (
     <>
-      <Heading title={agent.id === "custom" ? "Which AI does your agent use?" : `Which AI does your ${agent.name} agent use?`} sub="The company whose API key it has." />
+      <Heading
+        title={agent.id === "custom" ? "Which AI does your agent use?" : agent.group === "agent" ? `Which AI does ${agent.name} use?` : `Which AI does your ${agent.name} agent use?`}
+        sub="The company whose API key it has."
+      />
       <div className="mt-6 grid grid-cols-3 gap-2 sm:grid-cols-5">
         {[...providers].sort((a, b) => providerRank(a) - providerRank(b)).map((id) => {
           const known = PROVIDERS[id];
@@ -335,7 +382,9 @@ function SetupStep({
 }) {
   if (!status) return <Loader2 className="mx-auto my-16 size-5 animate-spin text-zinc-400" aria-label="Loading" />;
   const target = toTarget(status, newKey);
-  const via = agent.method === "proxy" ? PROVIDERS[provider] : undefined;
+  const via = asksProvider(agent) ? PROVIDERS[provider] : undefined;
+  const title = agent.id === "custom" ? "Connect your agent" : agent.provider ? `Connect your ${agent.name} calls` : `Connect ${agent.name}`;
+  const openclaw = agent.id === "openclaw";
   return (
     <>
       <div className="flex items-center gap-4">
@@ -349,13 +398,13 @@ function SetupStep({
             </LogoWell>
           )}
         </div>
-        <Heading title={agent.id === "custom" ? "Connect your agent" : `Connect ${agent.name}`} sub={SUBTITLES[agent.method]} />
+        <Heading title={title} sub={openclaw ? "Send it one message. It changes its own settings." : SUBTITLES[agent.method]} />
       </div>
 
       {!target.keyless && agent.method !== "device" && <KeyNote created={!!newKey} state={keyState} onRetry={onRetryKey} />}
 
       {agent.method === "device" && <DeviceSetup target={target} agent={agent} />}
-      {agent.method === "proxy" && <ProxySetup target={target} provider={provider} agent={agent} onUseOtel={onUseOtel} />}
+      {agent.method === "proxy" && (openclaw ? <OpenClawSetup target={target} provider={provider} /> : <ProxySetup target={target} provider={provider} agent={agent} onUseOtel={onUseOtel} />)}
       {agent.method === "otel" && <OtelSetup target={target} agent={agent} />}
     </>
   );
@@ -773,7 +822,7 @@ const LABEL_HEADERS: { name: string; what: string }[] = [
 ];
 
 function proxyPrompt(agent: AgentChoice, label: string, company: string, base: string, envLines: string) {
-  const what = agent.id === "custom" ? "this project's" : `this ${agent.name} project's`;
+  const what = ownCode(agent) ? "this project's" : `this ${agent.name} project's`;
   return `Route ${what} ${label} calls through Lucid, an observability tool, so its runs get recorded.
 
 - Point the ${label} client at this base URL: ${base}
@@ -846,6 +895,77 @@ function ProxySetup({ target, provider, agent, onUseOtel }: { target: Target; pr
 
 const LoopbackNote = ({ target }: { target: Target }) =>
   target.loopback ? <p className="mt-4 text-xs text-zinc-500 dark:text-zinc-400">Works for agents on this computer. Agents on other machines can't reach {target.endpoint}.</p> : null;
+
+// ---------------------------------------------------------------------------
+// OpenClaw: the proxy too, but set up by OpenClaw itself from a chat message
+
+/** OpenClaw's names for the providers, where they differ from Lucid's. */
+const OPENCLAW_PROVIDERS: Record<string, string> = { gemini: "google" };
+
+/** Overrides the built-in provider's address in ~/.openclaw/openclaw.json; its key and models stay. */
+function openclawConfig(provider: string, base: string) {
+  const p = PROVIDERS[provider];
+  // Lucid records chat completions, not OpenAI's Responses API, so the calls must use the former.
+  const api = p?.anthropic ? "anthropic-messages" : "openai-completions";
+  const extra = provider === "baseten" ? `\n        apiKey: "\${${p!.keyVar}}",\n        models: [{ id: "${p!.model}", name: "${p!.label}" }],` : "";
+  return `{
+  models: {
+    mode: "merge",
+    providers: {
+      ${OPENCLAW_PROVIDERS[provider] ?? provider}: {
+        baseUrl: "${base}",
+        api: "${api}",
+        headers: { "x-lucid-agent": "OpenClaw" },${extra}
+      },
+    },
+  },
+}`;
+}
+
+function openclawPrompt(label: string, company: string, config: string) {
+  return `Connect yourself to Lucid, an observability tool, so I can see your runs.
+
+1. In your config (~/.openclaw/openclaw.json), send the model provider you use for ${label} through Lucid by merging this in:
+   ${config.split("\n").join("\n   ")}
+   If you call ${label} under a different provider name, put the same settings on that one instead.
+2. Keep my ${company} API key, my models and everything else exactly as they are.
+3. Tell me what you changed, then restart your gateway (openclaw gateway restart) so it takes effect.`;
+}
+
+function OpenClawSetup({ target, provider }: { target: Target; provider: string }) {
+  const p = PROVIDERS[provider];
+  const label = p?.label ?? provider;
+  const company = p?.company ?? label;
+  const config = openclawConfig(provider, proxyBase(target, provider));
+  return (
+    <>
+      <Instructions>
+        <Instruction n={1} title="Send this message to OpenClaw">
+          <Fine>In WhatsApp, Telegram, Discord or wherever you chat with it. It changes its own settings and restarts.</Fine>
+          <AskAgent
+            title="Message for OpenClaw"
+            sub="Copy it, then paste it into your chat with OpenClaw."
+            prompt={openclawPrompt(label, company, config)}
+            note={target.keyless ? undefined : "The message includes your Lucid key."}
+            inStep
+          />
+        </Instruction>
+        <Instruction n={2} title="Chat with it once more">
+          <Fine>
+            Every chat shows up here from then on. Your {company} key stays with OpenClaw: Lucid passes it on to {company} and never stores it.
+          </Fine>
+        </Instruction>
+      </Instructions>
+      <More title="Rather edit the settings yourself?">
+        <Fine>
+          Merge this into <Mono>~/.openclaw/openclaw.json</Mono>, then run <Mono>openclaw gateway restart</Mono>.
+        </Fine>
+        <Snippet label="openclaw.json" code={config} />
+      </More>
+      <LoopbackNote target={target} />
+    </>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // OpenTelemetry

@@ -5,7 +5,9 @@
 import { type DehydratedState, type QueryClient, dehydrate, hydrate, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 
-const STORAGE_KEY = "lucid.cache.v1";
+/** A new version whenever a kept list changes shape (v2: Inbox entries by root cause); older copies are dropped. */
+const STORAGE_KEY = "lucid.cache.v2";
+const OLD_KEYS = ["lucid.cache.v1"];
 const MAX_AGE_MS = 24 * 60 * 60_000;
 const MAX_CHARS = 1_500_000;
 /** Small, often-shown lists. Run details and Arena are left out: bigger, and opened on purpose. */
@@ -15,6 +17,7 @@ type Saved = { owner: string; savedAt: number; state: DehydratedState };
 
 function restore(client: QueryClient, owner: string) {
   try {
+    for (const key of OLD_KEYS) localStorage.removeItem(key);
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "null") as Saved | null;
     if (!saved) return;
     // Another account's data never shows, even for a moment.
@@ -50,7 +53,7 @@ function keepSaving(client: QueryClient, owner: string) {
 /** On sign-out: nothing of this account stays behind in the browser. */
 export function forgetCache() {
   try {
-    localStorage.removeItem(STORAGE_KEY);
+    for (const key of [STORAGE_KEY, ...OLD_KEYS]) localStorage.removeItem(key);
   } catch {
     // Nothing stored, then.
   }

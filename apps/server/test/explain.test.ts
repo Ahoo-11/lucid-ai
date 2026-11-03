@@ -11,9 +11,13 @@ import { LiveHub } from "../src/live";
 type Diagnosis = { status: string; title?: string; summary?: string | null; fix?: string; model?: string; error?: string; auto?: boolean; inputTokens?: number; outputTokens?: number; latencyMs?: number };
 type Issue = { id: string; title: string; runs: number; toolName: string | null; diagnosis: Diagnosis | null; ignored: boolean };
 
-async function setup(chat: ChatClient | undefined) {
+const isGrouping = (request: ChatRequest) => String(request.messages[0]?.content).startsWith("You sort an AI agent's problems by root cause");
+
+async function setup(diagnoser: ChatClient | undefined) {
   const { db } = await openDb();
   const projectId = await ensureDefaultProject(db);
+  // The pass that joins problems with one cause finds none here; the model sees only diagnoses.
+  const chat: ChatClient | undefined = diagnoser && (async (request) => (isGrouping(request) ? { text: '{"groups": []}', latencyMs: 1 } : diagnoser(request)));
   const ctx: AppContext = {
     db,
     live: new LiveHub(),
@@ -35,7 +39,15 @@ async function setup(chat: ChatClient | undefined) {
   // A recurring problem (two runs), and a one-off.
   await fail("Bash", "wc: command not found", ["p1", "p2"]);
   await fail("Read", "EACCES: permission denied", ["p3"]);
-  const issues = async () => (await (await app.request("/api/issues")).json()) as { issues: Issue[]; diagnosisModel: string | null; autoDiagnose: boolean };
+  type Inbox = { issues: Issue[]; diagnosisModel: string | null; autoDiagnose: boolean; grouping: boolean };
+  /** The Inbox once new problems are grouped by cause: diagnoses wait for that. */
+  const issues = async () => {
+    for (;;) {
+      const inbox = (await (await app.request("/api/issues")).json()) as Inbox;
+      if (!inbox.grouping) return inbox;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  };
   const diagnose = (id: string) => post(`/api/issues/${id}/diagnose`, {});
   return { app, db, projectId, fail, issues, diagnose };
 }

@@ -24,13 +24,15 @@ import {
   TrendingUp,
   Ban,
   MessageSquareWarning,
+  Layers,
+  Unlink,
 } from "lucide-react";
 import { type ReactNode, useEffect, useState, useSyncExternalStore } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
-import { type AppliedLesson, type Diagnosis, type FixTest, type Issue, type ProblemKind, api } from "../api";
-import { ago, harnessLabel, plural } from "../format";
+import { type AppliedLesson, type Diagnosis, type FixTest, type Issue, type ProblemKind, type Symptom, api } from "../api";
+import { ago, harnessLabel, plural, toolLabel } from "../format";
 import { BRANDS, BrandMark } from "../landing/logos";
-import { BUTTON, CopyButton, Empty, LABEL, PageHeader, SURFACE, TabBar, TabItem, cx } from "../ui";
+import { BUTTON, CopyButton, Empty, LABEL, SURFACE, TabBar, TabItem, cx } from "../ui";
 
 /** Problems that hit more than one run are patterns worth fixing; the rest are listed separately. */
 export const isRecurring = (issue: Issue) => issue.runs >= 2;
@@ -116,9 +118,9 @@ export function Inbox() {
   const query = useQuery({
     queryKey: ["issues"],
     queryFn: api.issues,
-    // Soon again while a diagnosis or a fix test runs, or while an agent hasn't picked up a lesson yet.
+    // Soon again while problems are grouped by cause, a diagnosis or a fix test runs, or while an agent hasn't picked up a lesson yet.
     refetchInterval: (q) =>
-      q.state.data?.issues.some((issue) => issue.diagnosis?.status === "pending" || issue.fixTest?.status === "running")
+      q.state.data?.grouping || q.state.data?.issues.some((issue) => issue.diagnosis?.status === "pending" || issue.fixTest?.status === "running")
         ? 3_000
         : q.state.data?.issues.some((issue) => issue.lesson?.status === "active" && !issue.lesson.deliveredAt)
           ? 10_000
@@ -189,9 +191,14 @@ export function Inbox() {
   return (
     <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)] lg:items-start lg:gap-8 xl:grid-cols-[29rem_minmax(0,1fr)]">
       <div className="min-w-0 space-y-6">
-        <PageHeader title="Inbox" sub="Problems your agents keep running into, and fixes you can approve.">
-          {model && query.data && <AutoDiagnose model={model} on={query.data.autoDiagnose} />}
-        </PageHeader>
+        {/* pb-8 keeps the row the toggle used to sit on, so the tiles stay where they were. */}
+        <header className="pb-8">
+          <div className="flex items-center justify-between gap-x-6">
+            <h1 className="font-display text-[1.75rem] leading-tight font-bold tracking-tight text-balance">Inbox</h1>
+            {model && query.data && <AutoDiagnose model={model} on={query.data.autoDiagnose} />}
+          </div>
+          <div className="mt-1 text-[15px] text-zinc-500 dark:text-zinc-400">Problems your agents keep running into, and fixes you can approve.</div>
+        </header>
 
         <div className="grid grid-cols-3 gap-3">
           {TILES.map((tile) => (
@@ -216,6 +223,13 @@ export function Inbox() {
             </button>
           ))}
         </div>
+
+        {query.data?.grouping && (
+          <p className="flex items-center gap-2 px-1 text-sm text-zinc-500 dark:text-zinc-400">
+            <Loader2 className="size-3.5 shrink-0 animate-spin" />
+            {model ? modelLabel(model) : "Lucid"} is putting problems with the same cause together…
+          </p>
+        )}
 
         {view === "once" || view === "ignored" ? (
           <button type="button" onClick={() => showView("needs")} className="inline-flex items-center gap-1 text-sm font-medium text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white">
@@ -295,12 +309,10 @@ function AutoDiagnose({ model, on }: { model: string; on: boolean }) {
   return (
     <label
       className="flex shrink-0 cursor-pointer items-center gap-2 text-xs font-medium text-zinc-600 dark:text-zinc-300"
-      title={`${modelLabel(model)} diagnoses each recurring problem by itself (up to 20 a day), and checks runs that may have given up or answered wrong (up to 30 a day). Off: only when you click.`}
+      title={`${modelLabel(model)} puts problems with the same cause together, diagnoses each recurring problem by itself (up to 20 a day), and checks runs that may have given up or answered wrong (up to 30 a day). Off: only when you click.`}
     >
       {isMuse(model) && <BrandMark brand={BRANDS.meta} className="size-4" />}
-      <span>
-        Auto-diagnose<span className="hidden sm:inline"> with {modelLabel(model)}</span>
-      </span>
+      <span>Auto-diagnose</span>
       <button
         type="button"
         role="switch"
@@ -332,7 +344,7 @@ const FOUND_HOW: Record<Exclude<ProblemKind, "error">, string> = {
 };
 
 /** A picture of what went wrong: a loop, a cost spike, a refusal, a wrong answer, or where it broke. */
-function iconFor(issue: Issue) {
+function iconFor(issue: Pick<Issue, "problem" | "kind" | "toolName">) {
   if (issue.problem === "loop") return Repeat;
   if (issue.problem === "cost") return TrendingUp;
   if (issue.problem === "refusal") return Ban;
@@ -347,14 +359,36 @@ function iconFor(issue: Issue) {
   return Wrench;
 }
 
-function ProblemIcon({ issue, large }: { issue: Issue; large?: boolean }) {
+function ProblemIcon({ issue, large, small }: { issue: Pick<Issue, "problem" | "kind" | "toolName">; large?: boolean; small?: boolean }) {
   const Icon = iconFor(issue);
   return (
-    <span className={cx("grid shrink-0 place-items-center rounded-xl bg-zinc-100 text-zinc-600 dark:bg-white/[0.07] dark:text-zinc-300", large ? "size-11" : "size-9")} aria-hidden>
-      <Icon className={large ? "size-5" : "size-[18px]"} />
+    <span
+      className={cx("grid shrink-0 place-items-center bg-zinc-100 text-zinc-600 dark:bg-white/[0.07] dark:text-zinc-300", large ? "size-11 rounded-xl" : small ? "size-7 rounded-lg" : "size-9 rounded-xl")}
+      aria-hidden
+    >
+      <Icon className={large ? "size-5" : small ? "size-3.5" : "size-[18px]"} />
     </span>
   );
 }
+
+/** How Lucid knows a symptom has the entry's cause, in a few words. */
+function viaLabel(symptom: Symptom, model: string | null) {
+  switch (symptom.via) {
+    case "root":
+      return symptom.problem === "error" ? "The failure behind it" : "Where it started";
+    case "words":
+      return "Same error in another tool";
+    case "rule":
+      return "Same kind of failure";
+    case "run":
+      return symptom.problem === "error" ? "Came right before it" : "Came right after the failure";
+    case "model":
+      return `Grouped by ${model ? modelLabel(model) : "Lucid"}`;
+  }
+}
+
+/** A symptom in a word or two, for the runs list: "Gave up", or the tool that failed. */
+const shortLabel = (symptom: Symptom) => (symptom.problem !== "error" ? PROBLEM_LABEL[symptom.problem] : symptom.toolName ? `${toolLabel(symptom.toolName)} failed` : "Model call failed");
 
 const isMuse = (model: string) => /muse-spark/i.test(model);
 /** "Muse Spark" for Meta's model, the model id otherwise. */
@@ -421,13 +455,27 @@ function ProblemCard({ issue, model, selected, onSelect }: { issue: Issue; model
           {SAYS_MORE(stage) && <Pill stage={stage} />}
         </span>
         <span className="mt-1 line-clamp-2 text-sm leading-relaxed text-zinc-500 dark:text-zinc-400">{summaryOf(issue, stage, model)}</span>
-        <span className="mt-2.5 block text-xs text-zinc-400 dark:text-zinc-500">
-          {issue.problem !== "error" && `${PROBLEM_LABEL[issue.problem]} · `}
-          {harnessLabel(issue.harness)} · {plural(issue.runs, "run")}
-          {watching ? ` · fix live ${ago(issue.lesson!.deliveredAt)}` : issue.lastSeen && ` · ${ago(issue.lastSeen)}`}
+        <span className="mt-2.5 flex flex-wrap items-center gap-x-1 text-xs text-zinc-400 dark:text-zinc-500">
+          <span>
+            {issue.problem !== "error" && `${PROBLEM_LABEL[issue.problem]} · `}
+            {harnessLabel(issue.harness)} · {plural(issue.runs, "run")}
+            {watching ? ` · fix live ${ago(issue.lesson!.deliveredAt)}` : issue.lastSeen && ` · ${ago(issue.lastSeen)}`}
+          </span>
+          {issue.symptoms.length > 1 && <CausesTag count={issue.symptoms.length} />}
         </span>
       </span>
     </button>
+  );
+}
+
+/** "One cause of 3 problems": an entry that stands for several. */
+function CausesTag({ count }: { count: number }) {
+  return (
+    <span className="inline-flex items-center gap-1 text-zinc-500 dark:text-zinc-400" title="These problems share one cause. Fixing it should stop all of them.">
+      <span aria-hidden>·</span>
+      <Layers className="size-3" aria-hidden />
+      {count} problems, one cause
+    </span>
   );
 }
 
@@ -484,10 +532,17 @@ function ProblemPanel({ issue, model, onClose, onIgnored }: { issue: Issue; mode
     onSuccess: ({ fixTest }) => patch({ fixTest }),
     onSettled: refresh,
   });
+  // Out of this entry at once; its own entry shows on the refetch.
+  const split = useMutation({
+    mutationFn: (id: string) => api.splitIssue(id),
+    onSuccess: (_, id) => patch({ symptoms: issue.symptoms.filter((symptom) => symptom.id !== id) }),
+    onSettled: refresh,
+  });
   const pending = diagnose.isPending || issue.diagnosis?.status === "pending";
   const testing = runTest.isPending || issue.fixTest?.status === "running";
   const copy = () => void navigator.clipboard.writeText(text).then(() => setCopied(true));
-  const error = [apply, turnOff, ignore, diagnose, runTest].find((m) => m.isError)?.error;
+  const error = [apply, turnOff, ignore, diagnose, runTest, split].find((m) => m.isError)?.error;
+  const errors = issue.symptoms.filter((symptom) => symptom.problem === "error").length;
   // A fix not yet passed is tested first, and the server applies it when it passes.
   const testFirst = !issue.ignored && !active && !!proposed && issue.lessonsApply && test?.status !== "passed" && test?.status !== "untestable";
 
@@ -560,7 +615,7 @@ function ProblemPanel({ issue, model, onClose, onIgnored }: { issue: Issue; mode
             Runs <span className="rounded-full bg-zinc-100 px-1.5 text-xs tabular-nums text-zinc-600 dark:bg-white/10 dark:text-zinc-300">{issue.runs}</span>
           </TabItem>
           <TabItem current={tab === "error"} onClick={() => setTab("error")}>
-            {issue.problem === "error" ? "Error" : "Evidence"}
+            {issue.problem !== "error" ? "Evidence" : errors > 1 ? "Errors" : "Error"}
           </TabItem>
         </TabBar>
       </div>
@@ -577,6 +632,7 @@ function ProblemPanel({ issue, model, onClose, onIgnored }: { issue: Issue; mode
             <Block icon={Info} title="What happened">
               {(ai ?? issue).why}
             </Block>
+            {issue.symptoms.length > 1 && <Caused issue={issue} model={model} onSplit={(id) => split.mutate(id)} splitting={split.isPending ? split.variables : null} onRuns={() => setTab("runs")} />}
             {active ? (
               <ActiveFix lesson={active} />
             ) : (
@@ -627,6 +683,66 @@ function ProblemPanel({ issue, model, onClose, onIgnored }: { issue: Issue; mode
         {testFirst && <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">The fix is only applied if testing succeeds.</p>}
       </div>
     </div>
+  );
+}
+
+/** Rows shown before "Show all": enough to see the pattern. */
+const CAUSED_SHOWN = 5;
+
+/** Everything this cause made go wrong, each with how Lucid knows; any but the main one can be split out. */
+function Caused({ issue, model, onSplit, splitting, onRuns }: { issue: Issue; model: string | null; onSplit: (id: string) => void; splitting: string | null; onRuns: () => void }) {
+  const [all, setAll] = useState(false);
+  const shown = all ? issue.symptoms : issue.symptoms.slice(0, CAUSED_SHOWN);
+  // The same headline twice says nothing: those rows add the error's own first words.
+  const repeated = (symptom: Symptom) => issue.symptoms.some((other) => other !== symptom && other.title === symptom.title);
+  return (
+    <Block icon={Layers} title="What it caused">
+      <p>
+        One cause behind {plural(issue.symptoms.length, "problem")} in{" "}
+        <button type="button" onClick={onRuns} className="font-medium text-zinc-900 underline-offset-2 hover:underline dark:text-zinc-100">
+          {plural(issue.runs, "run")}
+        </button>
+        . Fixing it should stop all of them.
+      </p>
+      <ul className="mt-3 divide-y divide-zinc-100 overflow-hidden rounded-xl border border-zinc-200 dark:divide-white/[0.07] dark:border-white/10">
+        {shown.map((symptom) => (
+          <li key={symptom.id} className="flex items-center gap-3 px-3 py-2.5">
+            <ProblemIcon issue={symptom} small />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate font-medium text-zinc-900 dark:text-zinc-100" title={symptom.title}>
+                {symptom.title}
+              </span>
+              {repeated(symptom) && symptom.sample && (
+                <span className="block truncate font-mono text-[11px] text-zinc-500 dark:text-zinc-400" title={symptom.sample}>
+                  {symptom.sample.split("\n")[0]}
+                </span>
+              )}
+              <span className="block truncate text-xs text-zinc-500 dark:text-zinc-400">
+                {symptom.problem !== "error" && `${PROBLEM_LABEL[symptom.problem]} · `}
+                {plural(symptom.runs, "run")} · {viaLabel(symptom, model)}
+              </span>
+            </span>
+            {symptom.via !== "root" && (
+              <button
+                type="button"
+                onClick={() => onSplit(symptom.id)}
+                disabled={!!splitting}
+                title="It has its own cause: give it its own place in the Inbox."
+                className="inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-zinc-500 hover:bg-zinc-900/5 hover:text-zinc-900 disabled:opacity-40 dark:text-zinc-400 dark:hover:bg-white/10 dark:hover:text-white"
+              >
+                {splitting === symptom.id ? <Loader2 className="size-3 animate-spin" /> : <Unlink className="size-3" />}
+                Not the same
+              </button>
+            )}
+          </li>
+        ))}
+      </ul>
+      {issue.symptoms.length > CAUSED_SHOWN && (
+        <button type="button" onClick={() => setAll(!all)} className="mt-2 text-xs font-medium text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white">
+          {all ? "Show fewer" : `Show all ${issue.symptoms.length}`}
+        </button>
+      )}
+    </Block>
   );
 }
 
@@ -888,33 +1004,89 @@ function DiagnosedBy({ diagnosis: d, onRunAgain, busy }: { diagnosis: Diagnosis 
   );
 }
 
-/** The runs it hit, newest first, to open and read. */
+/** Every run the cause broke, newest first, with what went wrong in each when it went wrong in more than one way. */
 function RunsTab({ issue }: { issue: Issue }) {
+  const grouped = issue.symptoms.length > 1;
+  const byId = new Map(issue.symptoms.map((symptom) => [symptom.id, symptom]));
   return (
     <div className="space-y-4">
       <p className="text-sm text-zinc-600 dark:text-zinc-300">
-        Failed {plural(issue.occurrences, "time")} in {plural(issue.runs, "run")}
+        {grouped ? `Went wrong in ${plural(issue.runs, "run")}` : `Failed ${plural(issue.occurrences, "time")} in ${plural(issue.runs, "run")}`}
         {issue.firstSeen && `, first ${ago(issue.firstSeen)}`}
-        {issue.lastSeen && `, last ${ago(issue.lastSeen)}`}.
+        {issue.lastSeen && `, last ${ago(issue.lastSeen)}`}.{grouped && " They share one cause: fix it once and they should all stop."}
       </p>
       <ul className="divide-y divide-zinc-100 overflow-hidden rounded-xl border border-zinc-200 dark:divide-white/[0.07] dark:border-white/10">
-        {issue.examples.map((example) => (
-          <li key={example.runId}>
-            <Link to={`/runs/${example.runId}`} className="flex items-center gap-3 px-4 py-3 text-sm transition-colors hover:bg-zinc-50 dark:hover:bg-white/[0.03]">
+        {issue.affected.map((run) => (
+          <li key={run.runId}>
+            <Link to={`/runs/${run.runId}`} className="flex items-center gap-3 px-4 py-3 text-sm transition-colors hover:bg-zinc-50 dark:hover:bg-white/[0.03]">
               <span className="size-2 shrink-0 rounded-full bg-rose-500" aria-hidden />
-              <span className="min-w-0 flex-1 truncate">{example.runName ?? "Run"}</span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate">{run.runName ?? "Run"}</span>
+                {grouped && (
+                  <span className="block truncate text-xs text-zinc-500 dark:text-zinc-400">
+                    {run.problems
+                      .map((id) => byId.get(id))
+                      .filter((symptom) => symptom !== undefined)
+                      .map(shortLabel)
+                      .filter((label, i, all) => all.indexOf(label) === i)
+                      .join(", ")}
+                  </span>
+                )}
+              </span>
+              {run.at && <span className="shrink-0 text-xs text-zinc-400 tabular-nums dark:text-zinc-500">{ago(run.at)}</span>}
               <ChevronRight className="size-4 shrink-0 text-zinc-400" />
             </Link>
           </li>
         ))}
       </ul>
-      {issue.runs > issue.examples.length && <p className="text-xs text-zinc-500 dark:text-zinc-400">The latest {issue.examples.length} are shown.</p>}
+      {issue.runs > issue.affected.length && <p className="text-xs text-zinc-500 dark:text-zinc-400">The latest {issue.affected.length} are shown.</p>}
     </div>
   );
 }
 
-/** The raw error: for digging, not deciding. For a problem no step reported, what Lucid saw instead. */
+/** The raw errors: for digging, not deciding. The main one's first, then the others this cause made. */
 function ErrorTab({ issue }: { issue: Issue }) {
+  const others = issue.symptoms.slice(1);
+  return (
+    <div className="space-y-8">
+      <MainError issue={issue} />
+      {others.length > 0 && (
+        <section className="space-y-4">
+          <h3 className="text-sm font-semibold">The same cause also showed up as</h3>
+          {others.map((symptom) => (
+            <div key={symptom.id} className="space-y-2">
+              <p className="text-sm text-zinc-600 dark:text-zinc-300">
+                <span className="font-medium text-zinc-900 dark:text-zinc-100">{symptom.title}</span>
+                {symptom.toolName && (
+                  <>
+                    {" "}
+                    in <span className="font-mono text-[13px]">{symptom.toolName}</span>
+                  </>
+                )}
+              </p>
+              {symptom.sample && <RawText text={symptom.sample} />}
+            </div>
+          ))}
+        </section>
+      )}
+    </div>
+  );
+}
+
+/** An error as recorded, to copy. */
+function RawText({ text }: { text: string }) {
+  return (
+    <div className="overflow-hidden rounded-xl border border-zinc-200 dark:border-white/10">
+      <div className="flex justify-end border-b border-zinc-200 bg-zinc-50 px-1 py-0.5 dark:border-white/10 dark:bg-white/[0.03]">
+        <CopyButton text={text} />
+      </div>
+      <pre className="max-h-96 overflow-auto p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap text-zinc-700 [overflow-wrap:anywhere] dark:text-zinc-300">{text}</pre>
+    </div>
+  );
+}
+
+/** The main problem's error; for one no step reported, what Lucid saw instead. */
+function MainError({ issue }: { issue: Issue }) {
   if (issue.problem !== "error") {
     return (
       <div className="space-y-4">
@@ -937,16 +1109,7 @@ function ErrorTab({ issue }: { issue: Issue }) {
           "The step failed with:"
         )}
       </p>
-      {issue.sample ? (
-        <div className="overflow-hidden rounded-xl border border-zinc-200 dark:border-white/10">
-          <div className="flex justify-end border-b border-zinc-200 bg-zinc-50 px-1 py-0.5 dark:border-white/10 dark:bg-white/[0.03]">
-            <CopyButton text={issue.sample} />
-          </div>
-          <pre className="max-h-96 overflow-auto p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap text-zinc-700 [overflow-wrap:anywhere] dark:text-zinc-300">{issue.sample}</pre>
-        </div>
-      ) : (
-        <p className="text-sm text-zinc-500">No message was recorded.</p>
-      )}
+      {issue.sample ? <RawText text={issue.sample} /> : <p className="text-sm text-zinc-500">No message was recorded.</p>}
     </div>
   );
 }

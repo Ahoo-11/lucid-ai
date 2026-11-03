@@ -239,6 +239,25 @@ export const ignoredIssues = pgTable(
 );
 
 /**
+ * Inbox problems that share one root cause, by the model's reading: problems
+ * with the same group id are one Inbox entry. A row also means the model has
+ * compared the problem with the others, so it isn't sent again. A split one
+ * (the owner said it's a separate problem) stands alone, whatever the rules
+ * or the model say.
+ */
+export const issueGroups = pgTable(
+  "issue_groups",
+  {
+    projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+    issueId: text("issue_id").notNull(),
+    groupId: text("group_id"),
+    split: boolean("split").notNull().default(false),
+    createdAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.projectId, t.issueId] })],
+);
+
+/**
  * An instruction the owner approved for one kind of agent ("When running as a
  * cron job, never use execute_code"). The agent's Lucid plugin fetches the
  * active ones and adds them to every turn; turning one off removes it. Nothing
