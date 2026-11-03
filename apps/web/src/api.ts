@@ -124,6 +124,8 @@ export type ContextPartKey = "tools" | "system" | "history" | "request" | "work"
 export type ContextBreakdown = {
   calls: number;
   uncaptured: number;
+  /** Of `calls`, how many were rebuilt from the chat because their messages never came. */
+  rebuilt: number;
   measured: boolean;
   total: number;
   newTokens: number;
@@ -214,6 +216,9 @@ export type Symptom = {
   via: "root" | "words" | "rule" | "run" | "model";
 };
 
+/** How much an entry matters: rated by a model side by side with the others (its id in `by`), or estimated from how often it happened this week. */
+export type Importance = { level: "high" | "medium" | "low"; reason: string; by: string | null; at: string | null };
+
 /** A run the cause broke, and which of its symptoms showed up in it. */
 export type AffectedRun = { runId: string; runName: string | null; at: string | null; problems: string[] };
 
@@ -250,6 +255,7 @@ export type Issue = {
   symptoms: Symptom[];
   /** The runs it broke, newest first (up to 50). */
   affected: AffectedRun[];
+  importance: Importance;
 };
 
 /** One past decision replayed with the fix: did the agent avoid the problem? */
@@ -448,8 +454,8 @@ export const api = {
   run: (id: string) => request<RunDetail>(`/runs/${id}`),
   runContext: (id: string) => request<ContextBreakdown>(`/runs/${id}/context`),
   usage: (days: number) => request<Usage>(`/usage?days=${days}`),
-  /** grouping: the model is joining new problems that share a cause; diagnoses wait for it. */
-  issues: () => request<{ issues: Issue[]; diagnosisModel?: string | null; autoDiagnose: boolean; grouping?: boolean }>("/issues"),
+  /** grouping: the model is joining new problems that share a cause; diagnoses wait for it. rating: it's rating how much each matters. */
+  issues: () => request<{ issues: Issue[]; diagnosisModel?: string | null; autoDiagnose: boolean; grouping?: boolean; rating?: boolean }>("/issues"),
   /** Takes a problem out of the Inbox (or brings it back). */
   ignoreIssue: (issueId: string, ignore: boolean) =>
     request<{ ignored: boolean }>(`/issues/${encodeURIComponent(issueId)}/${ignore ? "ignore" : "restore"}`, { method: "POST", body: "{}" }),

@@ -22,8 +22,8 @@ const { deviceLinks } = schema;
 
 const TTL_MS = 10 * 60_000;
 const POLL_SECONDS = 2;
-/** What the installers can connect today. */
-const AGENTS: Record<string, string> = { "claude-code": "Claude Code", hermes: "Hermes Agent" };
+/** What the installers can connect today: "project" is someone's own agent, set up in its project's .env. */
+const AGENTS: Record<string, string> = { "claude-code": "Claude Code", hermes: "Hermes Agent", openclaw: "OpenClaw", project: "Their own agent" };
 /** Past runs people can ask for on the Approve page; none unless they choose. */
 const HISTORY_DAYS = new Set([0, 7, 30]);
 // 32 letters and digits that can't be misread (no 0/O, 1/I): 8 of them, no modulo bias.
@@ -129,8 +129,9 @@ export function linkRoutes(ctx: AppContext) {
       .where(and(eq(deviceLinks.id, row.id), eq(deviceLinks.status, "approved")))
       .returning({ projectId: deviceLinks.projectId, historyDays: deviceLinks.historyDays });
     if (!claimed?.projectId) return c.json({ status: "claimed" });
-    const names = row.agents.map((agent) => AGENTS[agent] ?? agent).join(", ");
-    const key = await createApiKey(db, claimed.projectId, `${row.machine} (${names})`);
+    // Someone's own agent is named by its folder, already in `machine` ("my-agent on MacBook").
+    const names = row.agents.filter((agent) => agent !== "project").map((agent) => AGENTS[agent] ?? agent);
+    const key = await createApiKey(db, claimed.projectId, names.length ? `${row.machine} (${names.join(", ")})` : row.machine);
     // historyDays: whether to bring in past runs, as chosen on the Approve page.
     return c.json({ status: "approved", key: key.key, endpoint: publicEndpoint(c), historyDays: claimed.historyDays });
   });

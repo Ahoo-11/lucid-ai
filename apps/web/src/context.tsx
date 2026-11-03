@@ -256,6 +256,14 @@ function Breakdown({ data, largest, contextWindow }: { data: ContextBreakdown; l
           </p>
         )}
         {cut && <p>Part of it was cut short when captured; Lucid counts what's missing from the provider's total.</p>}
+        {data.rebuilt > 0 && (
+          <p>
+            {data.rebuilt === data.calls ? "These calls" : `${plural(data.rebuilt, "call")} of these`} came without {data.rebuilt === 1 ? "its" : "their"} messages, so Lucid rebuilt them from the chat.{" "}
+            {data.measured
+              ? "The agent's instructions and tools aren't in the chat: they're the rest of the provider's count."
+              : "The agent's instructions and tools aren't in the chat, so the real calls were bigger."}
+          </p>
+        )}
         <p>{data.measured ? "Sized from what was sent and fitted to the provider's token counts." : "Estimated from what was sent: the provider didn't report token counts."}</p>
       </div>
     </div>

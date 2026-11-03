@@ -192,6 +192,17 @@ class PluginTest(unittest.TestCase):
         self.assertNotIn("truncated by Lucid", json.dumps(event["tools_def"]))
         self.assertNotIn("tools", event["request"]["body"])
 
+    def test_keeps_the_messages_when_hermes_sends_only_a_preview(self):
+        # Past HERMES_PLUGIN_PAYLOAD_MAX_CHARS, Hermes' sanitized `request` is a
+        # preview string with no body; the raw messages still come with the call.
+        sent = [{"role": "user", "content": "summarize the inbox"}]
+        preview = {"_truncated": True, "original_type": "dict", "preview": '{"method": "POST", "body": {"model": "x", "messa'}
+        self.ctx.hooks["pre_api_request"](session_id="s", turn_id="t", api_request_id="t:api:1", request=preview, request_messages=sent, system_prompt="You are Hermes.")
+        request = self.events()[0]["request"]
+        self.assertEqual(request["body"]["messages"], [{"role": "system", "content": "You are Hermes."}, *sent])
+        self.assertTrue(request["cut_by_hermes"])
+        self.assertNotIn("preview", request)
+
     def test_takes_tools_and_messages_from_what_hermes_sends(self):
         # Hermes' sanitized `request` has schemas cut to "<dict depth limit>";
         # the plugin reads the intact list from the caller's `api_kwargs`.

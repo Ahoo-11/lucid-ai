@@ -11,13 +11,14 @@ import { LiveHub } from "../src/live";
 type Diagnosis = { status: string; title?: string; summary?: string | null; fix?: string; model?: string; error?: string; auto?: boolean; inputTokens?: number; outputTokens?: number; latencyMs?: number };
 type Issue = { id: string; title: string; runs: number; toolName: string | null; diagnosis: Diagnosis | null; ignored: boolean };
 
-const isGrouping = (request: ChatRequest) => String(request.messages[0]?.content).startsWith("You sort an AI agent's problems by root cause");
+/** The Inbox's own passes: grouping by cause, and rating what matters. */
+const isGrouping = (request: ChatRequest) => /^You (sort an AI agent's problems|help the owner of AI agents decide)/.test(String(request.messages[0]?.content));
 
 async function setup(diagnoser: ChatClient | undefined) {
   const { db } = await openDb();
   const projectId = await ensureDefaultProject(db);
-  // The pass that joins problems with one cause finds none here; the model sees only diagnoses.
-  const chat: ChatClient | undefined = diagnoser && (async (request) => (isGrouping(request) ? { text: '{"groups": []}', latencyMs: 1 } : diagnoser(request)));
+  // The passes that group by cause and rate importance find nothing here; the model sees only diagnoses.
+  const chat: ChatClient | undefined = diagnoser && (async (request) => (isGrouping(request) ? { text: '{"groups": [], "ratings": []}', latencyMs: 1 } : diagnoser(request)));
   const ctx: AppContext = {
     db,
     live: new LiveHub(),

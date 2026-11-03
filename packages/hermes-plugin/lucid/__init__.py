@@ -90,7 +90,7 @@ LESSONS_TIMEOUT = 5.0
 # Lucid caps a lesson at 400 characters and sends at most 10; this is a backstop.
 LESSONS_MAX_CHARS = 4_000
 # Keep in step with plugin.yaml: Lucid reads it from here to offer updates.
-VERSION = "0.5.0"
+VERSION = "0.5.1"
 USER_AGENT = f"lucid-hermes-plugin/{VERSION}"
 # What this plugin is made of: all an update ever replaces.
 PLUGIN_FILES = ("__init__.py", "plugin.yaml")
@@ -603,9 +603,16 @@ def _observe(hook: str, kwargs: dict[str, Any]) -> None:
             payload["reasoning"] = reasoning[:MAX_STRING]
         if hook == "pre_api_request":
             _correlator.tools_once(payload, tools)
-            # Replays need the exact messages; the sanitized copy may be cut.
-            body = payload.get("request", {}).get("body") if isinstance(payload.get("request"), dict) else None
-            if messages is not None and isinstance(body, dict):
+            # Replays need the exact messages; the sanitized copy may be cut. Past
+            # Hermes' hook size limit (HERMES_PLUGIN_PAYLOAD_MAX_CHARS, 50,000 by
+            # default) the request is only a preview with no body, so they go in
+            # a body of their own, in place of the preview.
+            request = payload.get("request")
+            body = request.get("body") if isinstance(request, dict) else None
+            if messages is not None:
+                if not isinstance(body, dict):
+                    body = {}
+                    payload["request"] = {"body": body, "cut_by_hermes": True}
                 body["messages"] = messages
         _correlator.annotate(hook, payload)
         _sender.put(payload)

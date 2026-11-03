@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type CallInput, contextBreakdown } from "../src/contextBreakdown";
+import { type CallInput, type TurnStep, contextBreakdown, rebuildMessages } from "../src/contextBreakdown";
 
 const tool = (name: string, size: number) => ({ type: "function", function: { name, description: "x".repeat(size), parameters: { type: "object", properties: {} } } });
 const call = (fields: Partial<CallInput>): CallInput => ({
@@ -73,5 +73,54 @@ describe("contextBreakdown", () => {
     const wrapped = [{ role: "user", content: `Fix it\n\nLessons from your owner, via Lucid (follow them):\n- ${"never run cron jobs ".repeat(10)}` }];
     const result = contextBreakdown([call({ messages: wrapped })], "Fix it");
     expect(part(result, "request").items.map((i) => i.label)).toEqual(["Added by the agent, incl. Lucid's lessons", "What you wrote"]);
+  });
+
+  it("gives a rebuilt call's uncounted tokens to the setup the chat doesn't hold", () => {
+    const rebuilt = call({ messages: [{ role: "user", content: "Summarise the repo" }], inputTokens: 3000, rebuilt: true });
+    const result = contextBreakdown([rebuilt], "Summarise the repo");
+    expect(result.rebuilt).toBe(1);
+    expect(part(result, "request").tokens).toBeLessThan(10);
+    expect(part(result, "system").items).toEqual([{ label: "Instructions and setup (not recorded, sized from the token count)", tokens: expect.any(Number) }]);
+    expect(Math.abs(result.total - 3000)).toBeLessThanOrEqual(1);
+  });
+});
+
+describe("rebuildMessages", () => {
+  const step = (fields: Partial<TurnStep> & { stepId: string; kind: string }): TurnStep => ({ parentId: null, toolName: null, toolCallId: null, input: undefined, output: undefined, ...fields });
+
+  it("rebuilds each call of the last turn from the chat before it, and a sub-agent's from its task", () => {
+    const earlier = {
+      input: "Summarise the repo",
+      steps: [
+        step({ stepId: "a1", kind: "llm", output: { text: "", toolCalls: [{ id: "c1", name: "read_file", input: { path: "README.md" } }] } }),
+        step({ stepId: "c1", kind: "tool", toolName: "read_file", toolCallId: "c1", output: "# Lucid" }),
+        step({ stepId: "a2", kind: "llm", output: { text: "It's Lucid." } }),
+      ],
+    };
+    const now = {
+      input: "Check the tests",
+      steps: [
+        step({ stepId: "b1", kind: "llm", output: { text: "", toolCalls: [{ id: "c2", name: "delegate_task", input: { goal: "run them" } }] } }),
+        step({ stepId: "sub", kind: "agent", input: "Run the tests" }),
+        step({ stepId: "s1", kind: "llm", parentId: "sub", output: { text: "All pass." } }),
+        step({ stepId: "c2", kind: "agent", toolName: "delegate_task", toolCallId: "c2", output: "All pass." }),
+        step({ stepId: "b2", kind: "llm", output: { text: "Tests pass." } }),
+      ],
+    };
+    const rebuilt = rebuildMessages([earlier, now]);
+    expect([...rebuilt.keys()]).toEqual(["b1", "s1", "b2"]);
+    expect(rebuilt.get("b1")).toEqual([
+      { role: "user", content: "Summarise the repo" },
+      { role: "assistant", content: "", tool_calls: [{ id: "c1", type: "function", function: { name: "read_file", arguments: '{"path":"README.md"}' } }] },
+      { role: "tool", tool_call_id: "c1", name: "read_file", content: "# Lucid" },
+      { role: "assistant", content: "It's Lucid." },
+      { role: "user", content: "Check the tests" },
+    ]);
+    expect(rebuilt.get("s1")).toEqual([{ role: "user", content: "Run the tests" }]);
+    // The sub-agent's own work isn't in the main chat; its result is.
+    expect(rebuilt.get("b2")!.slice(-2)).toEqual([
+      { role: "assistant", content: "", tool_calls: [{ id: "c2", type: "function", function: { name: "delegate_task", arguments: '{"goal":"run them"}' } }] },
+      { role: "tool", tool_call_id: "c2", name: "delegate_task", content: "All pass." },
+    ]);
   });
 });

@@ -258,6 +258,24 @@ export const issueGroups = pgTable(
 );
 
 /**
+ * How much an Inbox entry matters, rated by the model with the other open
+ * ones side by side: high, medium or low, with its reason. Rated again daily.
+ */
+export const issuePriorities = pgTable(
+  "issue_priorities",
+  {
+    projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+    issueId: text("issue_id").notNull(),
+    /** high, medium or low. */
+    priority: text("priority").notNull(),
+    reason: text("reason").notNull(),
+    model: text("model").notNull(),
+    ratedAt: ts("rated_at").notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.projectId, t.issueId] })],
+);
+
+/**
  * An instruction the owner approved for one kind of agent ("When running as a
  * cron job, never use execute_code"). The agent's Lucid plugin fetches the
  * active ones and adds them to every turn; turning one off removes it. Nothing

@@ -1,6 +1,9 @@
 // The connect wizard: pick your agent by its logo, pick the AI it calls when
-// that matters, then copy one snippet (or a prompt for the agent itself)
-// while Lucid listens for the first run.
+// that matters, then copy one message while Lucid listens for the first run.
+// A ready-made agent gets the message itself and connects itself; someone's
+// own agent is set up by the coding agent working on its project. Either way
+// it runs Lucid's one command and the person clicks Approve, so no key goes
+// through a chat. The snippets to do it by hand are under "Do it yourself".
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, ArrowRight, Braces, Check, ChevronDown, Copy, KeyRound, Loader2, Sparkles, TriangleAlert, X } from "lucide-react";
@@ -12,18 +15,22 @@ import { cx } from "../ui";
 
 /** device: one command plus a click on Approve (connect.sh / connect.ps1). */
 type Method = "device" | "proxy" | "otel";
-type Group = "agent" | "model" | "framework";
+/** Ready-made agents people install and chat with, or an agent someone built (their code is what's connected). */
+type Group = "agent" | "own";
 export type AgentChoice = {
   id: string;
   name: string;
   brand?: Brand;
   method: Method;
   group?: Group;
-  /** Your own code calling this provider, so there's no "which AI" step. */
+  /** Set by an older link that named the AI itself (?agent=openai), so there's no "which AI" step. */
   provider?: string;
   /** Shown but not pickable yet; says why. */
   soon?: string;
 };
+
+/** An agent built without a framework: its code calls an AI provider itself. */
+const PLAIN_CODE: AgentChoice = { id: "custom", name: "Plain code", method: "proxy", group: "own" };
 
 /** Each agent goes the simplest way that captures it today. */
 const AGENT_CHOICES: AgentChoice[] = [
@@ -34,38 +41,33 @@ const AGENT_CHOICES: AgentChoice[] = [
   { id: "grok-bot", name: "Grok Bot", brand: BRANDS.grokbot, method: "proxy", group: "agent", soon: "Grok Bot runs on xAI's computers, which don't share its runs yet." },
   { id: "muse", name: "Muse", brand: BRANDS.muse, method: "proxy", group: "agent", soon: "Muse runs on Meta's computers, which don't share its runs yet." },
   { id: "dots", name: "OpenAI Dots", brand: BRANDS.dots, method: "proxy", group: "agent", soon: "Dots run on OpenAI's computers, which don't share their runs yet." },
-  { id: "baseten", name: "Muse Spark", brand: BRANDS.meta, method: "proxy", group: "model", provider: "baseten" },
-  { id: "openai", name: "OpenAI", brand: BRANDS.openai, method: "proxy", group: "model", provider: "openai" },
-  { id: "anthropic", name: "Anthropic", brand: BRANDS.anthropic, method: "proxy", group: "model", provider: "anthropic" },
-  { id: "gemini", name: "Gemini", brand: BRANDS.gemini, method: "proxy", group: "model", provider: "gemini" },
-  { id: "openrouter", name: "OpenRouter", brand: BRANDS.openrouter, method: "proxy", group: "model", provider: "openrouter" },
-  // The rest of the providers, and any agent not listed: the proxy, after "which AI".
-  { id: "custom", name: "Another one", method: "proxy", group: "model" },
-  { id: "langgraph", name: "LangGraph", brand: BRANDS.langgraph, method: "proxy", group: "framework" },
-  { id: "langchain", name: "LangChain", brand: BRANDS.langchain, method: "proxy", group: "framework" },
-  { id: "crewai", name: "CrewAI", brand: BRANDS.crewai, method: "proxy", group: "framework" },
-  { id: "pydantic-ai", name: "Pydantic AI", brand: BRANDS.pydanticai, method: "proxy", group: "framework" },
+  // Built with a framework: it calls the AI underneath, so the proxy, after "which AI".
+  { id: "langgraph", name: "LangGraph", brand: BRANDS.langgraph, method: "proxy", group: "own" },
+  { id: "langchain", name: "LangChain", brand: BRANDS.langchain, method: "proxy", group: "own" },
+  { id: "crewai", name: "CrewAI", brand: BRANDS.crewai, method: "proxy", group: "own" },
+  { id: "pydantic-ai", name: "Pydantic AI", brand: BRANDS.pydanticai, method: "proxy", group: "own" },
   // Both call OpenAI's Responses API, which the proxy doesn't record, so they use tracing.
-  { id: "openai-agents", name: "OpenAI Agents SDK", brand: BRANDS.openai, method: "otel", group: "framework" },
-  { id: "vercel-ai", name: "Vercel AI SDK", brand: BRANDS.vercel, method: "otel", group: "framework" },
+  { id: "openai-agents", name: "OpenAI Agents SDK", brand: BRANDS.openai, method: "otel", group: "own" },
+  { id: "vercel-ai", name: "Vercel AI SDK", brand: BRANDS.vercel, method: "otel", group: "own" },
+  PLAIN_CODE,
 ];
 
 const GROUPS: { id: Group; label: string; hint: string }[] = [
-  { id: "agent", label: "AI agents", hint: "Ready-made agents you talk to." },
-  { id: "model", label: "Models", hint: "Your own code that calls a model." },
-  { id: "framework", label: "Frameworks", hint: "Agents you build with a framework." },
+  { id: "agent", label: "Ready-made agents", hint: "Agents you install and chat with." },
+  { id: "own", label: "Your own agent", hint: "An agent you or your team built. What did you build it with?" },
 ];
 
 /** Goes through the proxy without knowing which AI yet. */
 const asksProvider = (agent: AgentChoice) => agent.method === "proxy" && !agent.provider;
-/** Code the owner wrote, rather than a named agent or framework. */
-const ownCode = (agent: AgentChoice) => agent.id === "custom" || !!agent.provider;
-const OTEL_CHOICE: AgentChoice = { id: "otel", name: "OpenTelemetry", brand: BRANDS.otel, method: "otel" };
+const OTEL_CHOICE: AgentChoice = { id: "otel", name: "OpenTelemetry", brand: BRANDS.otel, method: "otel", group: "own" };
+/** Someone's own agent, with no name of its own: plain code, or anything sending OpenTelemetry. */
+const unnamed = (agent: AgentChoice) => agent.id === "custom" || agent.id === "otel";
 
-/** For /connect?agent=…, including the older method names (proxy, otel). */
+/** For /connect?agent=…, including the older method names (proxy, otel) and AI names. */
 export function findAgent(id: string | null) {
-  if (id === "proxy") return AGENT_CHOICES.find((agent) => agent.id === "custom")!;
+  if (id === "proxy") return PLAIN_CODE;
   if (id === "otel") return OTEL_CHOICE;
+  if (id && id in PROVIDERS) return { ...PLAIN_CODE, provider: id };
   return AGENT_CHOICES.find((agent) => agent.id === id && !agent.soon) ?? null;
 }
 
@@ -91,7 +93,7 @@ function toTarget(status: ConnectStatus, key: string | null): Target {
 }
 
 /** Keys are named after the agent they were made for, so the key list reads like a list of agents. */
-const keyName = (agent: AgentChoice) => (ownCode(agent) ? "My agent" : agent.name);
+const keyName = (agent: AgentChoice) => (unnamed(agent) ? "My agent" : agent.name);
 
 /** Changes whenever anything new arrives. */
 const fingerprint = (status: ConnectStatus) =>
@@ -162,8 +164,8 @@ function Wizard({ initialAgent, newKey, onKey, close }: { initialAgent: AgentCho
     if (arrived) setStep("done");
   }, [arrived]);
 
-  // Hosted Lucid needs a key in the copy-paste setups: make one as soon as it's
-  // needed. The one-command setup gets its own when you approve the computer.
+  // The message's command gets its key when you approve. Doing it by hand needs
+  // one in the snippets on hosted Lucid: made when that section is opened.
   const createKey = useMutation({
     mutationFn: (name: string) => api.createKey(name),
     onSuccess: (created) => {
@@ -171,14 +173,9 @@ function Wizard({ initialAgent, newKey, onKey, close }: { initialAgent: AgentCho
       void queryClient.invalidateQueries({ queryKey: ["keys"] });
     },
   });
-  const needsKey = step === "setup" && agent?.method !== "device" && !!status.data && !status.data.localMode && !newKey;
-  const asked = useRef(false);
-  useEffect(() => {
-    if (needsKey && agent && !asked.current) {
-      asked.current = true;
-      createKey.mutate(keyName(agent));
-    }
-  }, [needsKey, agent, createKey]);
+  const ensureKey = () => {
+    if (agent && status.data && !status.data.localMode && !newKey && createKey.isIdle) createKey.mutate(keyName(agent));
+  };
 
   const flow: Step[] = agent && !asksProvider(agent) ? ["agent", "setup"] : ["agent", "provider", "setup"];
   const position = step === "done" ? flow.length : flow.indexOf(step);
@@ -235,6 +232,7 @@ function Wizard({ initialAgent, newKey, onKey, close }: { initialAgent: AgentCho
             status={status.data}
             newKey={newKey}
             keyState={createKey}
+            onManual={ensureKey}
             onRetryKey={() => createKey.mutate(keyName(agent))}
             onUseOtel={() => setAgent({ ...agent, method: "otel" })}
           />
@@ -242,6 +240,7 @@ function Wizard({ initialAgent, newKey, onKey, close }: { initialAgent: AgentCho
         {step === "done" && agent && (
           <Done
             agent={agent}
+            own={agent.group === "own"}
             first={(status.data?.runs ?? 0) > 0 && baseline.current?.startsWith("0|") === true}
             onSee={() => {
               close();
@@ -346,7 +345,7 @@ function ProviderStep({ agent, providers, onPick }: { agent: AgentChoice; provid
   return (
     <>
       <Heading
-        title={agent.id === "custom" ? "Which AI does your agent use?" : agent.group === "agent" ? `Which AI does ${agent.name} use?` : `Which AI does your ${agent.name} agent use?`}
+        title={agent.id === "custom" ? "Which AI does your agent call?" : agent.group === "agent" ? `Which AI does ${agent.name} use?` : `Which AI does your ${agent.name} agent call?`}
         sub="The company whose API key it has."
       />
       <div className="mt-6 grid grid-cols-3 gap-2 sm:grid-cols-5">
@@ -363,12 +362,15 @@ function ProviderStep({ agent, providers, onPick }: { agent: AgentChoice; provid
   );
 }
 
+type KeyState = { isPending: boolean; isError: boolean; error: Error | null };
+
 function SetupStep({
   agent,
   provider,
   status,
   newKey,
   keyState,
+  onManual,
   onRetryKey,
   onUseOtel,
 }: {
@@ -376,15 +378,19 @@ function SetupStep({
   provider: string;
   status: ConnectStatus | undefined;
   newKey: string | null;
-  keyState: { isPending: boolean; isError: boolean; error: Error | null };
+  keyState: KeyState;
+  /** "Do it yourself" was opened: its snippets need a key. */
+  onManual: () => void;
   onRetryKey: () => void;
   onUseOtel: () => void;
 }) {
   if (!status) return <Loader2 className="mx-auto my-16 size-5 animate-spin text-zinc-400" aria-label="Loading" />;
   const target = toTarget(status, newKey);
-  const via = asksProvider(agent) ? PROVIDERS[provider] : undefined;
-  const title = agent.id === "custom" ? "Connect your agent" : agent.provider ? `Connect your ${agent.name} calls` : `Connect ${agent.name}`;
-  const openclaw = agent.id === "openclaw";
+  const via = asksProvider(agent) || agent.provider ? PROVIDERS[provider] : undefined;
+  const own = agent.group === "own";
+  const title = own ? (unnamed(agent) ? "Connect your agent" : `Connect your ${agent.name} agent`) : `Connect ${agent.name}`;
+  // What "Do it yourself" shows first: the key it put in the snippets, unless this Lucid needs none.
+  const keyNote = !target.keyless && <KeyNote created={!!newKey} state={keyState} onRetry={onRetryKey} />;
   return (
     <>
       <div className="flex items-center gap-4">
@@ -398,25 +404,17 @@ function SetupStep({
             </LogoWell>
           )}
         </div>
-        <Heading title={title} sub={openclaw ? "Send it one message. It changes its own settings." : SUBTITLES[agent.method]} />
+        <Heading title={title} sub={own ? "Your coding agent sets it up. You click Approve." : "Send it one message, then click Approve. No keys to copy."} />
       </div>
 
-      {!target.keyless && agent.method !== "device" && <KeyNote created={!!newKey} state={keyState} onRetry={onRetryKey} />}
-
       {agent.method === "device" && <DeviceSetup target={target} agent={agent} />}
-      {agent.method === "proxy" && (openclaw ? <OpenClawSetup target={target} provider={provider} /> : <ProxySetup target={target} provider={provider} agent={agent} onUseOtel={onUseOtel} />)}
-      {agent.method === "otel" && <OtelSetup target={target} agent={agent} />}
+      {agent.id === "openclaw" && <OpenClawSetup target={target} provider={provider} keyNote={keyNote} onManual={onManual} />}
+      {own && <OwnAgentSetup target={target} agent={agent} provider={provider} keyNote={keyNote} onManual={onManual} onUseOtel={onUseOtel} />}
     </>
   );
 }
 
-const SUBTITLES: Record<Method, string> = {
-  device: "One command, then click Approve. No keys to copy.",
-  proxy: "Change one setting. Your code stays the same.",
-  otel: "Send the traces it already makes to Lucid.",
-};
-
-function KeyNote({ created, state, onRetry }: { created: boolean; state: { isPending: boolean; isError: boolean; error: Error | null }; onRetry: () => void }) {
+function KeyNote({ created, state, onRetry }: { created: boolean; state: KeyState; onRetry: () => void }) {
   if (state.isError) {
     return (
       <Callout tone="warn">
@@ -449,7 +447,7 @@ function Callout({ tone = "info", children }: { tone?: "info" | "warn"; children
   );
 }
 
-function Done({ agent, first, onSee, onAnother }: { agent: AgentChoice; first: boolean; onSee: () => void; onAnother: () => void }) {
+function Done({ agent, own, first, onSee, onAnother }: { agent: AgentChoice; own: boolean; first: boolean; onSee: () => void; onAnother: () => void }) {
   return (
     <div className="flex flex-col items-center py-6 text-center sm:py-10">
       <div className="relative">
@@ -464,6 +462,11 @@ function Done({ agent, first, onSee, onAnother }: { agent: AgentChoice; first: b
       <p className="mt-2 max-w-sm text-zinc-500 dark:text-zinc-400">
         {first ? "Your first run just arrived. From now on, every run shows up in Lucid on its own." : "New data just arrived. Every run from now on shows up in Lucid on its own."}
       </p>
+      {own && (
+        <p className="mt-4 max-w-sm rounded-xl bg-zinc-50 px-4 py-3 text-sm text-zinc-600 dark:bg-white/5 dark:text-zinc-300">
+          Runs on a server too? Add the Lucid settings from the project's <Mono>.env</Mono> to the server's environment settings, then redeploy.
+        </p>
+      )}
       <div className="mt-8 flex flex-wrap justify-center gap-3">
         <button
           type="button"
@@ -559,9 +562,10 @@ function Fine({ children }: { children: ReactNode }) {
 
 const Mono = ({ children }: { children: ReactNode }) => <code className="rounded bg-zinc-100 px-1 py-0.5 font-mono text-[0.85em] dark:bg-white/10">{children}</code>;
 
-function More({ title, children }: { title: string; children: ReactNode }) {
+/** A section folded away; `onOpen` runs when someone unfolds it. */
+function More({ title, onOpen, children }: { title: string; onOpen?: () => void; children: ReactNode }) {
   return (
-    <details className="group mt-6 rounded-xl ring-1 ring-zinc-200 dark:ring-white/10">
+    <details className="group mt-6 rounded-xl ring-1 ring-zinc-200 dark:ring-white/10" onToggle={(event) => event.currentTarget.open && onOpen?.()}>
       <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 text-sm font-medium text-zinc-600 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-white [&::-webkit-details-marker]:hidden">
         {title}
         <ChevronDown className="size-4 transition group-open:rotate-180" />
@@ -586,7 +590,7 @@ const lines = (...parts: (string | false)[]) =>
     .map((line) => (line as string).trim())
     .join("\n");
 
-/** A prompt to paste into the agent itself, so it does the setup. `inStep`: inside an Instruction, which spaces it already. */
+/** A message to paste into an agent, so it does the setup. `inStep`: inside an Instruction, which spaces it already. */
 function AskAgent({ title, sub, prompt, note, inStep }: { title: string; sub: string; prompt: string; note?: string; inStep?: boolean }) {
   const [copied, setCopied] = useState(false);
   return (
@@ -613,13 +617,13 @@ function AskAgent({ title, sub, prompt, note, inStep }: { title: string; sub: st
           )}
         >
           {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
-          {copied ? "Copied" : "Copy prompt"}
+          {copied ? "Copied" : "Copy message"}
         </button>
       </div>
       <details className="group mt-3">
         <summary className="cursor-pointer list-none text-xs font-medium text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white [&::-webkit-details-marker]:hidden">
-          <span className="group-open:hidden">Show the prompt</span>
-          <span className="hidden group-open:inline">Hide the prompt</span>
+          <span className="group-open:hidden">Show the message</span>
+          <span className="hidden group-open:inline">Hide the message</span>
         </summary>
         <pre className="mt-2 rounded-xl bg-white p-3 font-sans text-xs leading-relaxed whitespace-pre-wrap text-zinc-600 ring-1 ring-zinc-200 [overflow-wrap:anywhere] dark:bg-zinc-950 dark:text-zinc-300 dark:ring-white/10">{prompt}</pre>
       </details>
@@ -629,7 +633,8 @@ function AskAgent({ title, sub, prompt, note, inStep }: { title: string; sub: st
 }
 
 // ---------------------------------------------------------------------------
-// Claude Code and Hermes: one command, then Approve
+// Lucid's one command, then Approve: Claude Code and Hermes by default, or
+// what a setup link asks for (?for=project, tracing or openclaw; see connect.sh)
 
 type Os = "mac" | "windows" | "linux";
 
@@ -639,14 +644,21 @@ function detectOs(): Os {
   return platform.includes("win") ? "windows" : platform.includes("mac") ? "mac" : "linux";
 }
 
-const connectCommand = (target: Target, os: Os) => (os === "windows" ? `irm ${target.endpoint}/connect.ps1 | iex` : `curl -fsSL ${target.endpoint}/connect.sh | sh`);
+/** `setup`: the link's query, when it sets up something other than Claude Code and Hermes. Quoted then, for the "&". */
+const connectCommand = (target: Target, os: Os, setup = "") => {
+  const url = (file: string) => (setup ? `"${target.endpoint}/${file}?${setup}"` : `${target.endpoint}/${file}`);
+  return os === "windows" ? `irm ${url("connect.ps1")} | iex` : `curl -fsSL ${url("connect.sh")} | sh`;
+};
+
+/** The command for both kinds of computer, as a message gives it. */
+const bothCommands = (target: Target, setup = "") =>
+  `macOS or Linux: ${connectCommand(target, "mac", setup)}\n   Windows (PowerShell): ${connectCommand(target, "windows", setup)}`;
 
 function devicePrompt(target: Target) {
   return `Connect yourself to Lucid, an observability tool, so I can see your runs.
 
 1. Run this in a terminal on this computer:
-   macOS or Linux: ${connectCommand(target, "mac")}
-   Windows (PowerShell): ${connectCommand(target, "windows")}
+   ${bothCommands(target)}
    It waits up to 10 minutes for my approval, so run it in the background if your terminal tool has a time limit.
 2. It prints a link and a code. Show me both right away so I can click Approve.
 3. When it finishes, tell me what it connected and that I need to restart you.`;
@@ -724,27 +736,32 @@ function LocalSetup({ target, hermes }: { target: Target; hermes: boolean }) {
   return (
     <>
       <Instructions>
-        <Instruction n={1} title={os === "windows" ? "Open PowerShell and paste this" : os === "mac" ? "Open Terminal and paste this" : `Paste this where ${short} runs`}>
-          <Segmented
-            label="Computer"
-            value={os}
-            onChange={setOs}
-            options={[
-              { id: "mac", label: "Mac" },
-              { id: "windows", label: "Windows" },
-              { id: "linux", label: hermes ? "Linux" : "Linux or a server" },
-            ]}
-          />
-          <Snippet label={os === "windows" ? "PowerShell" : "Terminal"} code={connectCommand(target, os)} />
+        <Instruction n={1} title={`Send this message to ${short}`}>
+          <Fine>{hermes ? "In a chat with Hermes on this computer." : "In any Claude Code session on this computer."} It runs one command and shows you a link.</Fine>
+          <AskAgent title={`Message for ${short}`} sub={`Copy it, then paste it into ${short}.`} prompt={devicePrompt(target)} inStep />
         </Instruction>
-        <Instruction n={2} title="Click Approve on the page it opens">
-          <Fine>{os === "linux" ? "On a server, open the link it prints on any device where you're signed in." : "Check that the code on the page matches the one in your terminal."}</Fine>
+        <Instruction n={2} title="Click Approve on the link it shows you">
+          <Fine>Check that the code on the page matches the one in its reply.</Fine>
         </Instruction>
         <Instruction n={3} title={hermes ? "Restart Hermes" : "Start a new Claude Code session"}>
           <Fine>{hermes ? "Every chat shows up here from then on." : "Every session shows up here as it happens."} Want older ones too? Choose that when you approve.</Fine>
         </Instruction>
       </Instructions>
-      <AskAgent title={`Or let ${short} do it`} sub={`Paste this into ${short}. It runs the command and shows you the link to approve.`} prompt={devicePrompt(target)} />
+      <More title="Rather run the command yourself?">
+        <Fine>If {short} won't run it, this does the same. Then click Approve on the page it opens.</Fine>
+        <Segmented
+          label="Computer"
+          value={os}
+          onChange={setOs}
+          options={[
+            { id: "mac", label: "Mac" },
+            { id: "windows", label: "Windows" },
+            { id: "linux", label: hermes ? "Linux" : "Linux or a server" },
+          ]}
+        />
+        <Snippet label={os === "windows" ? "PowerShell" : "Terminal"} code={connectCommand(target, os)} />
+        {os === "linux" && <Fine>On a server, open the link it prints on any device where you're signed in.</Fine>}
+      </More>
       <WhatChanges />
       {os === "linux" && <LoopbackWarning target={target} />}
     </>
@@ -821,18 +838,94 @@ const LABEL_HEADERS: { name: string; what: string }[] = [
   { name: "x-lucid-user", what: "Your end user's id, to find their runs later." },
 ];
 
-function proxyPrompt(agent: AgentChoice, label: string, company: string, base: string, envLines: string) {
-  const what = ownCode(agent) ? "this project's" : `this ${agent.name} project's`;
-  return `Route ${what} ${label} calls through Lucid, an observability tool, so its runs get recorded.
+/** The setting the command adds to a project's .env (install.ts baseVariable): the OpenAI and Anthropic SDKs read theirs by themselves. */
+const baseVariable = (provider: string) => (provider === "openai" ? "OPENAI_BASE_URL" : provider === "anthropic" ? "ANTHROPIC_BASE_URL" : "LUCID_BASE_URL");
 
-- Point the ${label} client at this base URL: ${base}
-  If the client reads its settings from the environment, add this to the project's .env instead:
-  ${envLines.split("\n").join("\n  ")}
-- Keep the existing ${company} API key exactly as it is.
-- Don't change anything else. Then tell me what you changed and how to run it once.`;
+const indented = (text: string) => text.replace(/^/gm, "   ");
+
+/**
+ * For the coding agent working on someone's own agent: run the command in its
+ * project, get it approved, then make the code use the settings it adds. On a
+ * server too, where it can; otherwise it says what to add where.
+ */
+function projectPrompt(target: Target, agent: AgentChoice, provider: string) {
+  const tracing = agent.method === "otel";
+  const p = PROVIDERS[provider];
+  const label = p?.label ?? provider;
+  const company = p?.company ?? label;
+  const variable = baseVariable(provider);
+  const sdk = provider === "openai" ? "OpenAI" : provider === "anthropic" ? "Anthropic" : null;
+  const use = tracing
+    ? `It then adds OpenTelemetry settings (OTEL_EXPORTER_OTLP_...) to this project's .env, with my Lucid key in them. Make sure the app loads .env when it starts, and turn on tracing:\n${indented(OTEL_CODE[agent.id]?.code ?? "Send OpenTelemetry traces with an OTLP exporter, which reads those settings.")}`
+    : `It then adds ${variable} to this project's .env: Lucid's address for ${label}, with my Lucid key in it. Make sure every ${label} client in the project${unnamed(agent) ? "" : `, including the ones ${agent.name} makes,`} uses it as its base URL. ${
+        sdk ? `The ${sdk} SDK reads ${variable} by itself, so only code that sets base_url or baseURL by hand needs changing.` : "Pass it as the client's base_url (Python) or baseURL (TypeScript)."
+      } Keep the ${company} API key exactly as it is.`;
+  return `Connect this project's AI agent to Lucid, an observability tool, so I can see its runs.
+
+1. In this project's folder, run:
+   ${bothCommands(target, tracing ? "for=tracing" : `for=project&ai=${provider}`)}
+   It waits up to 10 minutes for my approval, so run it in the background if your terminal tool has a time limit.
+2. It prints a link and a code. Show me both right away so I can click Approve.
+3. ${use} Change nothing else, and don't show me the values.
+4. If the agent also runs on a server (Vercel, Render, Railway, Fly or a VPS), add the same settings to its environment there, with the host's command-line tool if it's installed and signed in, then redeploy. Otherwise, tell me exactly which settings to add where.
+5. Tell me what you changed and how to run the agent once.`;
 }
 
-function ProxySetup({ target, provider, agent, onUseOtel }: { target: Target; provider: string; agent: AgentChoice; onUseOtel: () => void }) {
+/** Someone's own agent: their coding agent sets it up from one message. The snippets are under "Do it yourself". */
+function OwnAgentSetup({
+  target,
+  agent,
+  provider,
+  keyNote,
+  onManual,
+  onUseOtel,
+}: {
+  target: Target;
+  agent: AgentChoice;
+  provider: string;
+  keyNote: ReactNode;
+  onManual: () => void;
+  onUseOtel: () => void;
+}) {
+  const tracing = agent.method === "otel";
+  const p = PROVIDERS[provider];
+  const company = p?.company ?? p?.label ?? provider;
+  return (
+    <>
+      <Instructions>
+        <Instruction n={1} title="Send this message to your coding agent">
+          <Fine>Claude Code, Cursor, Codex or another, opened in your agent's project. It runs one command there and points the code at Lucid.</Fine>
+          <AskAgent title="Message for your coding agent" sub="Copy it, then paste it into your coding agent." prompt={projectPrompt(target, agent, provider)} inStep />
+        </Instruction>
+        <Instruction n={2} title="Click Approve on the link it shows you">
+          <Fine>
+            {tracing
+              ? "Lucid's settings go into the project's .env, with your Lucid key in them. Keep .env out of git."
+              : `Your ${company} key stays in your project: Lucid passes it on to ${company} and never stores it.`}
+          </Fine>
+        </Instruction>
+        <Instruction n={3} title="Run your agent once">
+          <Fine>It shows up here as soon as it runs. Runs on a server too? Your coding agent adds the same settings there, or tells you where to add them.</Fine>
+        </Instruction>
+      </Instructions>
+      {agent.id === "langgraph" && !tracing && (
+        <Callout>
+          Want each step of the graph, not just the model calls?{" "}
+          <button type="button" onClick={onUseOtel} className="font-semibold text-zinc-900 underline underline-offset-2 dark:text-white">
+            Use OpenTelemetry instead
+          </button>
+        </Callout>
+      )}
+      <More title="Rather set it up yourself?" onOpen={onManual}>
+        {keyNote}
+        {tracing ? <OtelManual target={target} agent={agent} /> : <ProxyManual target={target} provider={provider} />}
+      </More>
+      <LoopbackNote target={target} />
+    </>
+  );
+}
+
+function ProxyManual({ target, provider }: { target: Target; provider: string }) {
   const [lang, setLang] = useState<Lang>("env");
   const base = proxyBase(target, provider);
   const p = PROVIDERS[provider];
@@ -862,21 +955,8 @@ function ProxySetup({ target, provider, agent, onUseOtel }: { target: Target; pr
           </Fine>
         </Instruction>
       </Instructions>
-      <AskAgent
-        title="Or let your coding agent do it"
-        sub="Paste this into Claude Code, Cursor or Codex, opened in your project."
-        prompt={proxyPrompt(agent, label, p?.company ?? label, base, proxySnippet("env", provider, base))}
-        note={target.keyless ? undefined : "The prompt includes your Lucid key, as the .env line does."}
-      />
-      {agent.id === "langgraph" && (
-        <Callout>
-          Want each step of the graph, not just the model calls?{" "}
-          <button type="button" onClick={onUseOtel} className="font-semibold text-zinc-900 underline underline-offset-2 dark:text-white">
-            Use OpenTelemetry instead
-          </button>
-        </Callout>
-      )}
-      <More title="Name and group your runs (optional)">
+      <div className="space-y-3 pt-4">
+        <p className="text-sm font-semibold">Name and group your runs (optional)</p>
         <ul className="space-y-1.5 text-sm">
           {LABEL_HEADERS.map((header) => (
             <li key={header.name} className="flex flex-col gap-0.5 sm:flex-row sm:gap-3">
@@ -887,8 +967,7 @@ function ProxySetup({ target, provider, agent, onUseOtel }: { target: Target; pr
         </ul>
         <Snippet label="Python" code={`client = ${client}(\n    base_url="${base}",\n    default_headers={"x-lucid-agent": "support-bot", "x-lucid-user": user_id},\n)`} />
         <Fine>Lucid records chat and messages calls, streaming included. Other calls pass through unrecorded.</Fine>
-      </More>
-      <LoopbackNote target={target} />
+      </div>
     </>
   );
 }
@@ -902,7 +981,7 @@ const LoopbackNote = ({ target }: { target: Target }) =>
 /** OpenClaw's names for the providers, where they differ from Lucid's. */
 const OPENCLAW_PROVIDERS: Record<string, string> = { gemini: "google" };
 
-/** Overrides the built-in provider's address in ~/.openclaw/openclaw.json; its key and models stay. */
+/** Overrides the built-in provider's address in ~/.openclaw/openclaw.json; its key and models stay. The command writes the same (install.ts). */
 function openclawConfig(provider: string, base: string) {
   const p = PROVIDERS[provider];
   // Lucid records chat completions, not OpenAI's Responses API, so the calls must use the former.
@@ -922,45 +1001,47 @@ function openclawConfig(provider: string, base: string) {
 }`;
 }
 
-function openclawPrompt(label: string, company: string, config: string) {
-  return `Connect yourself to Lucid, an observability tool, so I can see your runs.
-
-1. In your config (~/.openclaw/openclaw.json), send the model provider you use for ${label} through Lucid by merging this in:
-   ${config.split("\n").join("\n   ")}
-   If you call ${label} under a different provider name, put the same settings on that one instead.
-2. Keep my ${company} API key, my models and everything else exactly as they are.
-3. Tell me what you changed, then restart your gateway (openclaw gateway restart) so it takes effect.`;
-}
-
-function OpenClawSetup({ target, provider }: { target: Target; provider: string }) {
+/** OpenClaw runs the command where it runs, gets it approved, then merges the settings file the command saves. */
+function openclawPrompt(target: Target, provider: string) {
   const p = PROVIDERS[provider];
   const label = p?.label ?? provider;
   const company = p?.company ?? label;
-  const config = openclawConfig(provider, proxyBase(target, provider));
+  return `Connect yourself to Lucid, an observability tool, so I can see your runs.
+
+1. Run this with your terminal tool:
+   ${bothCommands(target, `for=openclaw&ai=${provider}`)}
+   It waits up to 10 minutes for my approval, so run it in the background and keep reading its output.
+   If your terminal runs in a separate sandbox rather than where you yourself run, stop and tell me instead.
+2. As soon as it prints a link and a code, send me both so I can approve.
+3. When it's done, it has saved Lucid's settings for your ${label} provider in ~/.lucid/openclaw.json5. Merge them into your config (~/.openclaw/openclaw.json). If you call ${label} under a different provider name, put the same settings on that one. Keep my ${company} API key, my models and everything else exactly as they are, and don't send me the settings: they hold my Lucid key.
+4. Tell me what you changed, then restart your gateway (openclaw gateway restart) so it takes effect.`;
+}
+
+function OpenClawSetup({ target, provider, keyNote, onManual }: { target: Target; provider: string; keyNote: ReactNode; onManual: () => void }) {
+  const p = PROVIDERS[provider];
+  const company = p?.company ?? p?.label ?? provider;
   return (
     <>
       <Instructions>
         <Instruction n={1} title="Send this message to OpenClaw">
-          <Fine>In WhatsApp, Telegram, Discord or wherever you chat with it. It changes its own settings and restarts.</Fine>
-          <AskAgent
-            title="Message for OpenClaw"
-            sub="Copy it, then paste it into your chat with OpenClaw."
-            prompt={openclawPrompt(label, company, config)}
-            note={target.keyless ? undefined : "The message includes your Lucid key."}
-            inStep
-          />
+          <Fine>In WhatsApp, Telegram, Discord or wherever you chat with it. It runs one command and changes its own settings.</Fine>
+          <AskAgent title="Message for OpenClaw" sub="Copy it, then paste it into your chat with OpenClaw." prompt={openclawPrompt(target, provider)} inStep />
         </Instruction>
-        <Instruction n={2} title="Chat with it once more">
+        <Instruction n={2} title="Approve on the link it sends back">
+          <Fine>Check that the code on the page matches the one in its message.</Fine>
+        </Instruction>
+        <Instruction n={3} title="Chat with it once more">
           <Fine>
             Every chat shows up here from then on. Your {company} key stays with OpenClaw: Lucid passes it on to {company} and never stores it.
           </Fine>
         </Instruction>
       </Instructions>
-      <More title="Rather edit the settings yourself?">
+      <More title="Rather edit the settings yourself?" onOpen={onManual}>
+        {keyNote}
         <Fine>
           Merge this into <Mono>~/.openclaw/openclaw.json</Mono>, then run <Mono>openclaw gateway restart</Mono>.
         </Fine>
-        <Snippet label="openclaw.json" code={config} />
+        <Snippet label="openclaw.json" code={openclawConfig(provider, proxyBase(target, provider))} />
       </More>
       <LoopbackNote target={target} />
     </>
@@ -1003,7 +1084,7 @@ const result = await generateText({
   },
 };
 
-function OtelSetup({ target, agent }: { target: Target; agent: AgentChoice }) {
+function OtelManual({ target, agent }: { target: Target; agent: AgentChoice }) {
   const extra = OTEL_CODE[agent.id];
   const env = lines(
     `OTEL_EXPORTER_OTLP_ENDPOINT=${target.endpoint}`,
@@ -1027,7 +1108,6 @@ function OtelSetup({ target, agent }: { target: Target; agent: AgentChoice }) {
           <Fine>Model calls, tools and handoffs show up here, with prompts and replies included.</Fine>
         </Instruction>
       </Instructions>
-      <LoopbackNote target={target} />
     </>
   );
 }

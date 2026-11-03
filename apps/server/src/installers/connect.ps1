@@ -1,7 +1,11 @@
-# Connects the AI agents on this computer to Lucid: Claude Code and Hermes Agent.
+# Connects AI agents to Lucid. By default, the ones on this computer: Claude Code and Hermes Agent.
 #   irm __LUCID_ENDPOINT__/connect.ps1 | iex
-# It asks you to approve this computer in your browser, then sets each agent
-# up. No key to copy. Run it again any time to reconnect or update.
+# Setup links in Lucid add what to connect instead, and Lucid fills in its settings:
+#   ?for=project&ai=<provider>   the agent in this folder, through Lucid's proxy: adds to its .env
+#   ?for=tracing                 the agent in this folder, by OpenTelemetry: adds to its .env
+#   ?for=openclaw&ai=<provider>  OpenClaw: saves settings for it to merge into its config
+# It asks you to approve in your browser, then sets things up. No key to copy.
+# Run it again any time to reconnect or update.
 # Only some agents: $env:LUCID_AGENTS = "hermes" before running it.
 # Don't open a browser: $env:LUCID_NO_BROWSER = "1"
 # Windows PowerShell 5.1 or later; plain ASCII so any console shows it.
@@ -9,6 +13,15 @@
   $ErrorActionPreference = 'Stop'
   $ProgressPreference = 'SilentlyContinue'
   [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+
+  $setupFor = '__LUCID_FOR__'
+  # What to write, from Lucid; the key slot in it becomes the key you approve.
+  $envLines = @'
+__LUCID_ENV__
+'@
+  $openclawSettings = @'
+__LUCID_OPENCLAW__
+'@
 
   function Has($name) { [bool](Get-Command $name -ErrorAction SilentlyContinue) }
 
@@ -33,37 +46,50 @@
     $hermesDir = if ($env:HERMES_HOME) { $env:HERMES_HOME } else { Join-Path $env:LOCALAPPDATA 'hermes' }
     # The same home folder Node uses, so Claude Code's helper and its settings agree.
     $userHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
+    $label = "$env:COMPUTERNAME"
 
     $agents = @()
-    if ($env:LUCID_AGENTS) {
-      $agents = @($env:LUCID_AGENTS -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    if ($setupFor -eq 'agents') {
+      if ($env:LUCID_AGENTS) {
+        $agents = @($env:LUCID_AGENTS -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+      } else {
+        if ((Test-Path (Join-Path $userHome '.claude')) -or (Has 'claude')) { $agents += 'claude-code' }
+        if ((Test-Path $hermesDir) -or (Has 'hermes')) { $agents += 'hermes' }
+      }
+
+      # Claude Code's hooks run Lucid's small Node.js helper.
+      if ($agents -contains 'claude-code') {
+        # Read "v22.13.0" rather than pass node a script: Windows PowerShell 5.1
+        # drops the quotes inside arguments it hands to programs.
+        $nodeOk = $false
+        if (Has 'node') {
+          $version = (Run 'node' @('--version')).out
+          $nodeOk = $version -match '^v(\d+)\.' -and [int]$Matches[1] -ge 18
+        }
+        if (-not $nodeOk) {
+          Write-Host 'Found Claude Code, but connecting it needs Node.js 18 or newer: https://nodejs.org'
+          $agents = @($agents | Where-Object { $_ -ne 'claude-code' })
+        }
+      }
+      if ($agents.Count -eq 0) { throw 'no Claude Code or Hermes Agent found on this computer. For other agents, follow the setup in Lucid.' }
+      $labels = @{ 'claude-code' = 'Claude Code'; 'hermes' = 'Hermes Agent' }
+      $what = "$(($agents | ForEach-Object { $labels[$_] }) -join ' and ') on $env:COMPUTERNAME"
+    } elseif ($setupFor -eq 'openclaw') {
+      # OpenClaw may run commands in a sandbox of their own, where its config isn't.
+      if (-not ((Test-Path (Join-Path $userHome '.openclaw')) -or (Has 'openclaw'))) { throw 'no OpenClaw found here. If this terminal runs in a separate sandbox, run it where OpenClaw itself runs.' }
+      $agents = @('openclaw')
+      $what = "OpenClaw on $env:COMPUTERNAME"
     } else {
-      if ((Test-Path (Join-Path $userHome '.claude')) -or (Has 'claude')) { $agents += 'claude-code' }
-      if ((Test-Path $hermesDir) -or (Has 'hermes')) { $agents += 'hermes' }
+      $agents = @('project')
+      $folder = Split-Path -Leaf (Get-Location).Path
+      $what = "the agent in $folder"
+      $label = "$folder on $env:COMPUTERNAME"
     }
 
-    # Claude Code's hooks run Lucid's small Node.js helper.
-    if ($agents -contains 'claude-code') {
-      # Read "v22.13.0" rather than pass node a script: Windows PowerShell 5.1
-      # drops the quotes inside arguments it hands to programs.
-      $nodeOk = $false
-      if (Has 'node') {
-        $version = (Run 'node' @('--version')).out
-        $nodeOk = $version -match '^v(\d+)\.' -and [int]$Matches[1] -ge 18
-      }
-      if (-not $nodeOk) {
-        Write-Host 'Found Claude Code, but connecting it needs Node.js 18 or newer: https://nodejs.org'
-        $agents = @($agents | Where-Object { $_ -ne 'claude-code' })
-      }
-    }
-    if ($agents.Count -eq 0) { throw 'no Claude Code or Hermes Agent found on this computer. For other agents, follow the setup in Lucid.' }
-
-    $labels = @{ 'claude-code' = 'Claude Code'; 'hermes' = 'Hermes Agent' }
-    $names = ($agents | ForEach-Object { $labels[$_] }) -join ' and '
-    Write-Host "Lucid: connecting $names on $env:COMPUTERNAME..."
+    Write-Host "Lucid: connecting $what..."
 
     try {
-      $start = Post '/api/links/start' @{ machine = "$env:COMPUTERNAME"; os = 'Windows'; agents = [string[]]$agents }
+      $start = Post '/api/links/start' @{ machine = $label; os = 'Windows'; agents = [string[]]$agents }
     } catch {
       $detail = $null
       try { $detail = ($_.ErrorDetails.Message | ConvertFrom-Json).error } catch { }
@@ -72,7 +98,7 @@
     }
 
     Write-Host ''
-    Write-Host '  Approve this computer in your browser:'
+    Write-Host '  Approve this in your browser:'
     Write-Host "    $($start.url)" -ForegroundColor Green
     Write-Host ''
     Write-Host "  Check that the page shows the code $($start.userCode)."
@@ -96,6 +122,33 @@
     if ($answered.historyDays) { $historyDays = [int]$answered.historyDays }
     Write-Host 'Approved.'
     Write-Host ''
+
+    if ($agents -contains 'project') {
+      # The folder this runs in is the agent's project. Its other settings stay as they are.
+      $envFile = Join-Path (Get-Location).Path '.env'
+      $new = @($envLines -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ } | ForEach-Object { $_.Replace('__LUCID_KEY__', $key) })
+      $names = @($new | ForEach-Object { ($_ -split '=', 2)[0] })
+      $kept = @()
+      if (Test-Path $envFile) { $kept = @([IO.File]::ReadAllLines($envFile) | Where-Object { $names -notcontains ($_ -split '=', 2)[0].Trim() }) }
+      # UTF-8 without a byte-order mark, which would break the first setting.
+      [IO.File]::WriteAllLines($envFile, [string[]]($kept + $new))
+      Write-Host "- Added to $envFile, with your Lucid key in them:" -ForegroundColor Green
+      foreach ($name in $names) { Write-Host "    $name" }
+      if ((Has 'git') -and (Run 'git' @('rev-parse', '--is-inside-work-tree')).ok -and -not (Run 'git' @('check-ignore', '-q', '.env')).ok) {
+        Write-Host "  .env isn't in .gitignore. Add it there, so your Lucid key isn't committed." -ForegroundColor Yellow
+      }
+      Write-Host "  The agent's code has to use them; then run the agent once. Where it also runs on a server,"
+      Write-Host '  add the same settings to that server''s environment settings.'
+    }
+
+    if ($agents -contains 'openclaw') {
+      $lucidDir = Join-Path $userHome '.lucid'
+      New-Item -ItemType Directory -Force -Path $lucidDir | Out-Null
+      $settings = Join-Path $lucidDir 'openclaw.json5'
+      [IO.File]::WriteAllText($settings, ($openclawSettings.Trim().Replace('__LUCID_KEY__', $key) + "`n"))
+      Write-Host "- OpenClaw: Lucid's settings are in $settings, with your Lucid key in them." -ForegroundColor Green
+      Write-Host '  Merge them into ~/.openclaw/openclaw.json, keeping your own key and models, then run: openclaw gateway restart'
+    }
 
     if ($agents -contains 'hermes') {
       $dest = Join-Path $hermesDir 'plugins\lucid'

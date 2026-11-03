@@ -1,5 +1,5 @@
 name: lucid
-version: "0.5.0"
+version: "0.5.1"
 description: "Lucid observability: sends every turn, model call, tool call, sub-agent and approval to your Lucid dashboard, so you can see why the agent did what it did."
 author: Lucid
 kind: standalone

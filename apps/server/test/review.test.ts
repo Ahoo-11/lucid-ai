@@ -18,9 +18,9 @@ const holding = (all: Issue[], problem: string) => all.filter((issue) => issue.s
 async function setup(checker?: ChatClient) {
   const { db } = await openDb();
   const projectId = await ensureDefaultProject(db);
-  // The pass that joins problems with one cause finds none here; the model sees only checks.
-  const chat: ChatClient | undefined =
-    checker && (async (request) => (String(request.messages[0]?.content).startsWith("You sort an AI agent's problems") ? { text: '{"groups": []}', latencyMs: 1 } : checker(request)));
+  // The passes that group by cause and rate importance find nothing here; the model sees only checks.
+  const inboxPass = (request: ChatRequest) => /^You (sort an AI agent's problems|help the owner of AI agents decide)/.test(String(request.messages[0]?.content));
+  const chat: ChatClient | undefined = checker && (async (request) => (inboxPass(request) ? { text: '{"groups": [], "ratings": []}', latencyMs: 1 } : checker(request)));
   const ctx: AppContext = {
     db,
     live: new LiveHub(),

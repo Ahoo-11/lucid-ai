@@ -29,10 +29,10 @@ import {
 } from "lucide-react";
 import { type ReactNode, useEffect, useState, useSyncExternalStore } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
-import { type AppliedLesson, type Diagnosis, type FixTest, type Issue, type ProblemKind, type Symptom, api } from "../api";
+import { type AppliedLesson, type Diagnosis, type FixTest, type Importance, type Issue, type ProblemKind, type Symptom, api } from "../api";
 import { ago, harnessLabel, plural, toolLabel } from "../format";
 import { BRANDS, BrandMark } from "../landing/logos";
-import { BUTTON, CopyButton, Empty, LABEL, SURFACE, TabBar, TabItem, cx } from "../ui";
+import { BUTTON, CopyButton, Empty, LABEL, SURFACE, Segmented, TabBar, TabItem, cx } from "../ui";
 
 /** Problems that hit more than one run are patterns worth fixing; the rest are listed separately. */
 export const isRecurring = (issue: Issue) => issue.runs >= 2;
@@ -100,6 +100,20 @@ const EMPTY: Record<View, [title: string, text: string]> = {
   ignored: ["Nothing ignored", "Problems you ignore wait here, in case you want them back."],
 };
 
+type Level = Importance["level"];
+
+const LEVELS: Level[] = ["high", "medium", "low"];
+
+/** How much a problem matters, most first: its word, and the color of its bars. */
+const LEVEL: Record<Level, { label: string; rank: number; bar: string; text: string }> = {
+  high: { label: "High", rank: 0, bar: "bg-rose-500", text: "text-rose-700 dark:text-rose-300" },
+  medium: { label: "Medium", rank: 1, bar: "bg-amber-500", text: "text-amber-700 dark:text-amber-300" },
+  low: { label: "Low", rank: 2, bar: "bg-zinc-400 dark:bg-zinc-500", text: "text-zinc-500 dark:text-zinc-400" },
+};
+
+/** The lists where what to fix first is the question: what needs a fix, and the one-offs. */
+const RATED: View[] = ["needs", "once"];
+
 const WIDE = "(min-width: 1024px)";
 
 /** Side by side on a wide screen; on a phone the problem opens over the list. */
@@ -118,9 +132,9 @@ export function Inbox() {
   const query = useQuery({
     queryKey: ["issues"],
     queryFn: api.issues,
-    // Soon again while problems are grouped by cause, a diagnosis or a fix test runs, or while an agent hasn't picked up a lesson yet.
+    // Soon again while problems are grouped or rated, a diagnosis or a fix test runs, or while an agent hasn't picked up a lesson yet.
     refetchInterval: (q) =>
-      q.state.data?.grouping || q.state.data?.issues.some((issue) => issue.diagnosis?.status === "pending" || issue.fixTest?.status === "running")
+      q.state.data?.grouping || q.state.data?.rating || q.state.data?.issues.some((issue) => issue.diagnosis?.status === "pending" || issue.fixTest?.status === "running")
         ? 3_000
         : q.state.data?.issues.some((issue) => issue.lesson?.status === "active" && !issue.lesson.deliveredAt)
           ? 10_000
@@ -134,8 +148,13 @@ export function Inbox() {
   const all = query.data?.issues ?? [];
   const model = query.data?.diagnosisModel ?? null;
   const count = (v: View) => all.filter((issue) => VIEW_OF[stageOf(issue)] === v).length;
-  // Server order is most runs first; within a list, what needs you comes first.
-  const shown = all.filter((issue) => VIEW_OF[stageOf(issue)] === view).sort((a, b) => STAGE[stageOf(a)].rank - STAGE[stageOf(b)].rank);
+  const rated = RATED.includes(view);
+  const level: Level | "all" = (rated && LEVELS.find((l) => l === params.get("importance"))) || "all";
+  const inView = all.filter((issue) => VIEW_OF[stageOf(issue)] === view);
+  // Server order is most runs first; within a list, what matters most and what needs you come first.
+  const shown = inView
+    .filter((issue) => level === "all" || issue.importance.level === level)
+    .sort((a, b) => (rated ? LEVEL[a.importance.level].rank - LEVEL[b.importance.level].rank : 0) || STAGE[stageOf(a)].rank - STAGE[stageOf(b)].rank);
   const picked = params.get("problem");
   const selected = all.find((issue) => issue.id === picked) ?? (wide ? shown[0] : undefined);
 
@@ -154,6 +173,13 @@ export function Inbox() {
     update((next) => {
       if (v === "needs") next.delete("view");
       else next.set("view", v);
+      next.delete("problem");
+      next.delete("importance");
+    });
+  const showLevel = (l: Level | "all") =>
+    update((next) => {
+      if (l === "all") next.delete("importance");
+      else next.set("importance", l);
       next.delete("problem");
     });
   const close = () => ((location.state as { sheet?: boolean } | null)?.sheet ? navigate(-1) : select(null));
@@ -224,10 +250,10 @@ export function Inbox() {
           ))}
         </div>
 
-        {query.data?.grouping && (
+        {(query.data?.grouping || query.data?.rating) && (
           <p className="flex items-center gap-2 px-1 text-sm text-zinc-500 dark:text-zinc-400">
             <Loader2 className="size-3.5 shrink-0 animate-spin" />
-            {model ? modelLabel(model) : "Lucid"} is putting problems with the same cause together…
+            {model ? modelLabel(model) : "Lucid"} {query.data.grouping ? "is putting problems with the same cause together…" : "is rating how much each problem matters…"}
           </p>
         )}
 
@@ -238,8 +264,28 @@ export function Inbox() {
           </button>
         ) : null}
 
+        {rated && inView.length > 1 && (
+          <Segmented
+            label="How much it matters"
+            value={level}
+            onChange={showLevel}
+            options={[
+              { value: "all" as const, label: <LevelOption label="All" count={inView.length} /> },
+              ...LEVELS.map((l) => ({ value: l, label: <LevelOption label={LEVEL[l].label} count={inView.filter((issue) => issue.importance.level === l).length} /> })),
+            ]}
+          />
+        )}
+
         {query.isPending ? (
           <div className="text-sm text-zinc-500">Loading…</div>
+        ) : shown.length === 0 && level !== "all" ? (
+          <div className={SURFACE}>
+            <Empty icon={<CheckCircle2 className="size-7 text-emerald-500" />} title={`Nothing of ${LEVEL[level].label.toLowerCase()} importance here`}>
+              <button type="button" onClick={() => showLevel("all")} className="font-medium text-zinc-700 underline underline-offset-2 dark:text-zinc-200">
+                Show all
+              </button>
+            </Empty>
+          </div>
         ) : shown.length === 0 ? (
           <div className={SURFACE}>
             <Empty icon={<CheckCircle2 className="size-7 text-emerald-500" />} title={EMPTY[view][0]}>
@@ -255,7 +301,7 @@ export function Inbox() {
           <ul className="space-y-2.5">
             {shown.map((issue) => (
               <li key={issue.id}>
-                <ProblemCard issue={issue} model={model} selected={selected?.id === issue.id} onSelect={() => select(issue.id)} />
+                <ProblemCard issue={issue} model={model} rated={rated} selected={selected?.id === issue.id} onSelect={() => select(issue.id)} />
               </li>
             ))}
           </ul>
@@ -309,7 +355,7 @@ function AutoDiagnose({ model, on }: { model: string; on: boolean }) {
   return (
     <label
       className="flex shrink-0 cursor-pointer items-center gap-2 text-xs font-medium text-zinc-600 dark:text-zinc-300"
-      title={`${modelLabel(model)} puts problems with the same cause together, diagnoses each recurring problem by itself (up to 20 a day), and checks runs that may have given up or answered wrong (up to 30 a day). Off: only when you click.`}
+      title={`${modelLabel(model)} puts problems with the same cause together, rates how much each matters, diagnoses each recurring problem by itself (up to 20 a day), and checks runs that may have given up or answered wrong (up to 30 a day). Off: only when you click.`}
     >
       {isMuse(model) && <BrandMark brand={BRANDS.meta} className="size-4" />}
       <span>Auto-diagnose</span>
@@ -433,7 +479,40 @@ function summaryOf(issue: Issue, stage: Stage, model: string | null): ReactNode 
   }
 }
 
-function ProblemCard({ issue, model, selected, onSelect }: { issue: Issue; model: string | null; selected: boolean; onSelect: () => void }) {
+/** Signal bars for how much it matters: three for high, one for low. */
+function Bars({ level }: { level: Level }) {
+  const filled = 3 - LEVEL[level].rank;
+  return (
+    <span className="inline-flex items-end gap-px" aria-hidden>
+      {["h-1.5", "h-2.5", "h-3.5"].map((height, i) => (
+        <span key={height} className={cx("w-[3px] rounded-[1px]", height, i < filled ? LEVEL[level].bar : "bg-zinc-200 dark:bg-white/15")} />
+      ))}
+    </span>
+  );
+}
+
+function ImportanceMark({ importance, long }: { importance: Importance; long?: boolean }) {
+  const { level } = importance;
+  return (
+    <span className={cx("inline-flex shrink-0 items-center gap-1.5 text-xs font-medium whitespace-nowrap", LEVEL[level].text)} title={importance.reason}>
+      <Bars level={level} />
+      {LEVEL[level].label}
+      {long && " importance"}
+    </span>
+  );
+}
+
+/** A filter choice with how many it holds. */
+function LevelOption({ label, count }: { label: string; count: number }) {
+  return (
+    <span className="inline-flex items-baseline gap-1.5">
+      {label}
+      <span className="text-xs tabular-nums text-zinc-400 dark:text-zinc-500">{count}</span>
+    </span>
+  );
+}
+
+function ProblemCard({ issue, model, rated, selected, onSelect }: { issue: Issue; model: string | null; rated: boolean; selected: boolean; onSelect: () => void }) {
   const stage = stageOf(issue);
   const ai = readyDiagnosis(issue);
   const watching = issue.lesson?.status === "active" && issue.lesson.deliveredAt;
@@ -452,7 +531,12 @@ function ProblemCard({ issue, model, selected, onSelect }: { issue: Issue; model
       <span className="min-w-0 flex-1">
         <span className="flex items-start justify-between gap-3">
           <span className="pt-0.5 text-[15px] leading-snug font-semibold">{(ai ?? issue).title}</span>
-          {SAYS_MORE(stage) && <Pill stage={stage} />}
+          {(SAYS_MORE(stage) || rated) && (
+            <span className="flex shrink-0 items-center gap-2 pt-1">
+              {SAYS_MORE(stage) && <Pill stage={stage} />}
+              {rated && <ImportanceMark importance={issue.importance} />}
+            </span>
+          )}
         </span>
         <span className="mt-1 line-clamp-2 text-sm leading-relaxed text-zinc-500 dark:text-zinc-400">{summaryOf(issue, stage, model)}</span>
         <span className="mt-2.5 flex flex-wrap items-center gap-x-1 text-xs text-zinc-400 dark:text-zinc-500">
@@ -599,12 +683,21 @@ function ProblemPanel({ issue, model, onClose, onIgnored }: { issue: Issue; mode
             <h2 className="font-display text-xl leading-snug font-bold tracking-tight text-balance">{(ai ?? issue).title}</h2>
             <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-zinc-500 dark:text-zinc-400">
               <Pill stage={stage} />
+              <ImportanceMark importance={issue.importance} long />
               <span>
                 {issue.problem !== "error" && `${PROBLEM_LABEL[issue.problem]} · `}
                 {agent} · {plural(issue.runs, issue.problem === "error" ? "failed run" : "run")}
                 {issue.lastSeen && ` · last ${ago(issue.lastSeen)}`}
               </span>
             </div>
+            {issue.importance.reason && (
+              <p className="mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-300">
+                {issue.importance.reason}{" "}
+                <span className="text-xs whitespace-nowrap text-zinc-400 dark:text-zinc-500">
+                  {issue.importance.by ? `Rated by ${modelLabel(issue.importance.by)}` : "Estimated from this week's runs"}
+                </span>
+              </p>
+            )}
           </div>
         </div>
         <TabBar className="mt-6">

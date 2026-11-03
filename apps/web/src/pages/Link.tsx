@@ -2,7 +2,7 @@
 // the installer receives its key (see apps/server/src/links.ts).
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, Check, Laptop, Loader2, Server, X } from "lucide-react";
+import { ArrowRight, Braces, Check, Laptop, Loader2, Server, X } from "lucide-react";
 import { type FormEvent, type ReactNode, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import { api } from "../api";
@@ -10,10 +10,17 @@ import { BRANDS, type Brand, BrandMark } from "../landing/logos";
 import { cx } from "../ui";
 import { LogoWell } from "./ConnectWizard";
 
-const AGENTS: Record<string, { name: string; brand: Brand; next: string }> = {
-  "claude-code": { name: "Claude Code", brand: BRANDS.claudeCode, next: "Start a new Claude Code session." },
-  hermes: { name: "Hermes Agent", brand: BRANDS.hermes, next: "Restart Hermes (the gateway, the desktop app or its container)." },
+/** `brand`: none for someone's own agent. `history`: it can bring in past runs. */
+const AGENTS: Record<string, { name: string; brand?: Brand; next: string; history?: boolean }> = {
+  "claude-code": { name: "Claude Code", brand: BRANDS.claudeCode, next: "Start a new Claude Code session.", history: true },
+  hermes: { name: "Hermes Agent", brand: BRANDS.hermes, next: "Restart Hermes (the gateway, the desktop app or its container).", history: true },
+  openclaw: { name: "OpenClaw", brand: BRANDS.openclaw, next: "OpenClaw adds the settings to its config and restarts its gateway." },
+  project: { name: "Your own agent", next: "Your coding agent points the code at the new settings. Then run your agent once." },
 };
+
+function AgentLogo({ brand, className }: { brand?: Brand; className: string }) {
+  return brand ? <BrandMark brand={brand} className={className} /> : <Braces className={cx("text-zinc-500 dark:text-zinc-400", className)} strokeWidth={1.75} />;
+}
 
 const HISTORY_CHOICES = [
   { days: 0, label: "No" },
@@ -44,8 +51,10 @@ function Approve({ code, onRetry }: { code: string; onRetry: () => void }) {
   });
   // Past runs are opt-in: a new connection starts clean unless people ask.
   const [historyDays, setHistoryDays] = useState(0);
+  // Only Claude Code and Hermes keep past runs to bring in.
+  const history = !!link.data && "agents" in link.data && link.data.agents.some((id) => AGENTS[id]?.history);
   const decide = useMutation({
-    mutationFn: (decision: "approve" | "deny") => api.links.decide(code, decision, historyDays),
+    mutationFn: (decision: "approve" | "deny") => api.links.decide(code, decision, history ? historyDays : 0),
     onSettled: () => void queryClient.invalidateQueries({ queryKey: ["link", code] }),
   });
 
@@ -78,13 +87,13 @@ function Approve({ code, onRetry }: { code: string; onRetry: () => void }) {
               {agents.map((agent) => (
                 <li key={agent.name} className="flex items-center gap-3 rounded-xl bg-zinc-50 p-3 text-sm dark:bg-white/5">
                   <LogoWell size="size-9 rounded-lg">
-                    <BrandMark brand={agent.brand} className="size-5" />
+                    <AgentLogo brand={agent.brand} className="size-5" />
                   </LogoWell>
                   {agent.next}
                 </li>
               ))}
             </ul>
-            {historyDays > 0 && (
+            {history && historyDays > 0 && (
               <p className="text-sm text-zinc-500 dark:text-zinc-400">Then your last {historyDays} days come in, newest first. Runs shows the progress.</p>
             )}
             <Link
@@ -113,7 +122,7 @@ function Approve({ code, onRetry }: { code: string; onRetry: () => void }) {
         {agents.map((agent) => (
           <li key={agent.name} className="flex items-center gap-3 rounded-xl p-3 ring-1 ring-zinc-200 dark:ring-white/10">
             <LogoWell size="size-10 rounded-lg">
-              <BrandMark brand={agent.brand} className="size-6" />
+              <AgentLogo brand={agent.brand} className="size-6" />
             </LogoWell>
             <span className="font-medium">{agent.name}</span>
           </li>
@@ -123,34 +132,36 @@ function Approve({ code, onRetry }: { code: string; onRetry: () => void }) {
       <div className="mt-6 rounded-2xl bg-zinc-50 px-4 py-4 dark:bg-white/5">
         <div className="text-xs font-medium tracking-wide text-zinc-500 uppercase dark:text-zinc-400">Code</div>
         <div className="mt-1 font-mono text-3xl font-semibold tracking-[0.15em]">{data.code}</div>
-        <div className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">Check it matches the one in your terminal.</div>
+        <div className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">Check it matches the one in your terminal, or in your agent's reply.</div>
       </div>
 
-      <div className="mt-6 text-left" role="radiogroup" aria-labelledby="history-label">
-        <div id="history-label" className="font-semibold">
-          Also bring in past runs?
+      {history && (
+        <div className="mt-6 text-left" role="radiogroup" aria-labelledby="history-label">
+          <div id="history-label" className="font-semibold">
+            Also bring in past runs?
+          </div>
+          <p className="text-sm text-zinc-500 dark:text-zinc-400">New runs show up from now on either way.</p>
+          <div className="mt-3 grid grid-cols-3 gap-2">
+            {HISTORY_CHOICES.map((choice) => (
+              <button
+                key={choice.days}
+                type="button"
+                role="radio"
+                aria-checked={historyDays === choice.days}
+                onClick={() => setHistoryDays(choice.days)}
+                className={cx(
+                  "rounded-xl px-2 py-2.5 text-sm font-medium ring-1 transition",
+                  historyDays === choice.days
+                    ? "bg-zinc-900 text-white ring-zinc-900 dark:bg-white dark:text-zinc-900 dark:ring-white"
+                    : "text-zinc-600 ring-zinc-200 hover:bg-zinc-50 dark:text-zinc-300 dark:ring-white/10 dark:hover:bg-white/5",
+                )}
+              >
+                {choice.label}
+              </button>
+            ))}
+          </div>
         </div>
-        <p className="text-sm text-zinc-500 dark:text-zinc-400">New runs show up from now on either way.</p>
-        <div className="mt-3 grid grid-cols-3 gap-2">
-          {HISTORY_CHOICES.map((choice) => (
-            <button
-              key={choice.days}
-              type="button"
-              role="radio"
-              aria-checked={historyDays === choice.days}
-              onClick={() => setHistoryDays(choice.days)}
-              className={cx(
-                "rounded-xl px-2 py-2.5 text-sm font-medium ring-1 transition",
-                historyDays === choice.days
-                  ? "bg-zinc-900 text-white ring-zinc-900 dark:bg-white dark:text-zinc-900 dark:ring-white"
-                  : "text-zinc-600 ring-zinc-200 hover:bg-zinc-50 dark:text-zinc-300 dark:ring-white/10 dark:hover:bg-white/5",
-              )}
-            >
-              {choice.label}
-            </button>
-          ))}
-        </div>
-      </div>
+      )}
 
       {decide.isError && <p className="mt-4 rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:bg-rose-500/10 dark:text-rose-300">{decide.error.message}</p>}
 
@@ -168,7 +179,7 @@ function Approve({ code, onRetry }: { code: string; onRetry: () => void }) {
           Don't allow
         </SecondaryButton>
       </div>
-      <p className="mt-5 text-xs text-zinc-500 dark:text-zinc-400">Only approve a computer you just ran Lucid's command on yourself.</p>
+      <p className="mt-5 text-xs text-zinc-500 dark:text-zinc-400">Only approve a command you, or an agent you asked, just ran.</p>
     </div>
   );
 }

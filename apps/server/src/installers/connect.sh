@@ -1,11 +1,19 @@
 #!/bin/sh
-# Connects the AI agents on this computer to Lucid: Claude Code and Hermes Agent.
+# Connects AI agents to Lucid. By default, the ones on this computer: Claude Code and Hermes Agent.
 #   curl -fsSL __LUCID_ENDPOINT__/connect.sh | sh
-# It asks you to approve this computer in your browser, then sets each agent
-# up. No key to copy. Run it again any time to reconnect or update.
+# Setup links in Lucid add what to connect instead, and Lucid fills in its settings:
+#   ?for=project&ai=<provider>   the agent in this folder, through Lucid's proxy: adds to its .env
+#   ?for=tracing                 the agent in this folder, by OpenTelemetry: adds to its .env
+#   ?for=openclaw&ai=<provider>  OpenClaw: saves settings for it to merge into its config
+# It asks you to approve in your browser, then sets things up. No key to copy.
+# Run it again any time to reconnect or update.
 # Only some agents: ... | LUCID_AGENTS=hermes sh. Don't open a browser: LUCID_NO_BROWSER=1
 set -eu
 LUCID_ENDPOINT="${LUCID_ENDPOINT:-__LUCID_ENDPOINT__}"
+LUCID_FOR="__LUCID_FOR__"
+# What to write, from Lucid; the key slot in it becomes the key you approve.
+LUCID_ENV='__LUCID_ENV__'
+LUCID_OPENCLAW='__LUCID_OPENCLAW__'
 HERMES_DIR="${HERMES_HOME:-$HOME/.hermes}"
 
 say() { printf '%s\n' "$*"; }
@@ -30,22 +38,6 @@ post() {
 field() { printf '%s' "$1" | sed -n 's/.*"'"$2"'":"\([^"]*\)".*/\1/p'; }
 number() { printf '%s' "$1" | sed -n 's/.*"'"$2"'":\([0-9][0-9]*\).*/\1/p'; }
 
-AGENTS="${LUCID_AGENTS:-}"
-if [ -z "$AGENTS" ]; then
-  if [ -d "$HOME/.claude" ] || has claude; then AGENTS="claude-code"; fi
-  if [ -d "$HERMES_DIR" ] || has hermes; then AGENTS="${AGENTS:+$AGENTS,}hermes"; fi
-fi
-wants() { case ",$AGENTS," in *",$1,"*) return 0 ;; esac; return 1; }
-
-# Claude Code's hooks run Lucid's small Node.js helper. "v22.13.0" -> 22.
-NODE_MAJOR=$(node --version 2>/dev/null | sed -n 's/^v\([0-9][0-9]*\)\..*/\1/p')
-if wants claude-code && [ "${NODE_MAJOR:-0}" -lt 18 ]; then
-  say "Found Claude Code, but connecting it needs Node.js 18 or newer: https://nodejs.org"
-  AGENTS=$(printf '%s' "$AGENTS" | sed 's/claude-code//; s/^,//; s/,$//')
-fi
-[ -n "$AGENTS" ] || fail "no Claude Code or Hermes Agent found on this computer. For other agents, follow the setup in Lucid."
-
-NAMES=$(printf '%s' "$AGENTS" | sed 's/claude-code/Claude Code/; s/hermes/Hermes Agent/; s/,/ and /')
 MACHINE=$( (hostname 2>/dev/null || uname -n) | tr -cd 'A-Za-z0-9._ -' | cut -c1-64)
 case "$(uname -s 2>/dev/null)" in
   Darwin) OS=macOS ;;
@@ -53,9 +45,44 @@ case "$(uname -s 2>/dev/null)" in
   *) OS=Unix ;;
 esac
 
-say "Lucid: connecting $NAMES on $MACHINE..."
+case "$LUCID_FOR" in
+  agents)
+    AGENTS="${LUCID_AGENTS:-}"
+    if [ -z "$AGENTS" ]; then
+      if [ -d "$HOME/.claude" ] || has claude; then AGENTS="claude-code"; fi
+      if [ -d "$HERMES_DIR" ] || has hermes; then AGENTS="${AGENTS:+$AGENTS,}hermes"; fi
+    fi
+    # Claude Code's hooks run Lucid's small Node.js helper. "v22.13.0" -> 22.
+    NODE_MAJOR=$(node --version 2>/dev/null | sed -n 's/^v\([0-9][0-9]*\)\..*/\1/p')
+    case ",$AGENTS," in *",claude-code,"*)
+      if [ "${NODE_MAJOR:-0}" -lt 18 ]; then
+        say "Found Claude Code, but connecting it needs Node.js 18 or newer: https://nodejs.org"
+        AGENTS=$(printf '%s' "$AGENTS" | sed 's/claude-code//; s/^,//; s/,$//')
+      fi
+    esac
+    [ -n "$AGENTS" ] || fail "no Claude Code or Hermes Agent found on this computer. For other agents, follow the setup in Lucid."
+    WHAT="$(printf '%s' "$AGENTS" | sed 's/claude-code/Claude Code/; s/hermes/Hermes Agent/; s/,/ and /') on $MACHINE"
+    LABEL="$MACHINE"
+    ;;
+  openclaw)
+    # OpenClaw may run commands in a sandbox of their own, where its config isn't.
+    [ -d "$HOME/.openclaw" ] || has openclaw || fail "no OpenClaw found here. If this terminal runs in a separate sandbox, run it where OpenClaw itself runs."
+    AGENTS=openclaw
+    WHAT="OpenClaw on $MACHINE"
+    LABEL="$MACHINE"
+    ;;
+  *)
+    AGENTS=project
+    FOLDER=$(basename "$PWD" | tr -cd 'A-Za-z0-9._ -' | cut -c1-40)
+    WHAT="the agent in $FOLDER"
+    LABEL="$FOLDER on $MACHINE"
+    ;;
+esac
+wants() { case ",$AGENTS," in *",$1,"*) return 0 ;; esac; return 1; }
+
+say "Lucid: connecting $WHAT..."
 AGENTS_JSON=$(printf '%s' "$AGENTS" | sed 's/[^,][^,]*/"&"/g')
-START=$(post /api/links/start "{\"machine\":\"$MACHINE\",\"os\":\"$OS\",\"agents\":[$AGENTS_JSON]}")
+START=$(post /api/links/start "{\"machine\":\"$LABEL\",\"os\":\"$OS\",\"agents\":[$AGENTS_JSON]}")
 DEVICE=$(field "$START" deviceCode)
 if [ -z "$DEVICE" ]; then
   ERROR=$(field "$START" error)
@@ -65,7 +92,7 @@ CODE=$(field "$START" userCode)
 URL=$(field "$START" url)
 
 say ""
-say "  Approve this computer in your browser:"
+say "  Approve this in your browser:"
 say "    $URL"
 say ""
 say "  Check that the page shows the code $CODE."
@@ -93,6 +120,37 @@ done
 HISTORY_DAYS="${HISTORY_DAYS:-0}"
 say "Approved."
 say ""
+
+# Lucid's settings with the key in its slot. Keys are letters, digits and underscores.
+filled() { printf '%s\n' "$1" | sed "s|__LUCID_KEY__|$KEY|g"; }
+
+if wants project; then
+  # The folder this runs in is the agent's project. Its other settings stay as they are.
+  ENV_FILE="$PWD/.env"
+  touch "$ENV_FILE"
+  NAMES=$(printf '%s\n' "$LUCID_ENV" | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p')
+  PATTERN=$(printf '%s' "$NAMES" | tr '\n' '|')
+  grep -v -E "^($PATTERN)=" "$ENV_FILE" > "$ENV_FILE.lucid" || true
+  filled "$LUCID_ENV" >> "$ENV_FILE.lucid"
+  cat "$ENV_FILE.lucid" > "$ENV_FILE"
+  rm -f "$ENV_FILE.lucid"
+  say "- Added to $ENV_FILE, with your Lucid key in them:"
+  printf '%s\n' "$NAMES" | sed 's/^/    /'
+  if has git && git rev-parse --is-inside-work-tree >/dev/null 2>&1 && ! git check-ignore -q .env 2>/dev/null; then
+    say "  .env isn't in .gitignore. Add it there, so your Lucid key isn't committed."
+  fi
+  say "  The agent's code has to use them; then run the agent once. Where it also runs on a server,"
+  say "  add the same settings to that server's environment settings."
+fi
+
+if wants openclaw; then
+  mkdir -p "$HOME/.lucid"
+  SETTINGS="$HOME/.lucid/openclaw.json5"
+  filled "$LUCID_OPENCLAW" > "$SETTINGS"
+  chmod 600 "$SETTINGS" 2>/dev/null || true
+  say "- OpenClaw: Lucid's settings are in $SETTINGS, with your Lucid key in them."
+  say "  Merge them into ~/.openclaw/openclaw.json, keeping your own key and models, then run: openclaw gateway restart"
+fi
 
 if wants hermes; then
   DEST="$HERMES_DIR/plugins/lucid"

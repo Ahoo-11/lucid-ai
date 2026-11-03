@@ -237,6 +237,45 @@ describe("Hermes", () => {
     expect((await env.post("/api/reprocess", { harness: "claude-code", rebuild: true })).status).toBe(400);
   });
 
+  it("splits what a call read from the chat when its messages never came: imported history, or a request Hermes cut short", async () => {
+    type Context = { calls: number; rebuilt: number; measured: boolean; parts: { key: string; tokens: number; items: { label: string }[] }[] };
+    const env = await setup();
+    await env.post("/v1/imports/hermes", {
+      sessions: [{ id: "sess-c", started_at: T0 }],
+      messages: [
+        { id: 1, session_id: "sess-c", role: "user", content: "List the files", timestamp: T0 },
+        { id: 2, session_id: "sess-c", role: "assistant", content: "", tool_calls: JSON.stringify([{ id: "c1", function: { name: "terminal", arguments: '{"command":"ls"}' } }]), timestamp: T0 + 1 },
+        { id: 3, session_id: "sess-c", role: "tool", tool_call_id: "c1", content: "a.txt\nb.txt", timestamp: T0 + 2 },
+        { id: 4, session_id: "sess-c", role: "assistant", content: "Two files.", timestamp: T0 + 3 },
+        { id: 5, session_id: "sess-c", role: "user", content: "Open a.txt", timestamp: T0 + 10 },
+        { id: 6, session_id: "sess-c", role: "assistant", content: "It says hello.", timestamp: T0 + 11 },
+      ],
+    });
+    // A live call whose request Hermes cut to a preview, from a plugin older than 0.5.1.
+    const TURN2 = "sess-l:task:1";
+    await env.post("/v1/hooks/hermes", {
+      events: [
+        { hook: "pre_llm_call", ts: T0, session_id: "sess-l", turn_id: TURN2, user_message: "Summarize the repo" },
+        { hook: "pre_api_request", ts: T0, session_id: "sess-l", turn_id: TURN2, api_request_id: `${TURN2}:api:1`, model: "gpt-4o-mini", started_at: T0, request: { _truncated: true, preview: "{" } },
+        { hook: "post_api_request", ts: T0 + 2, session_id: "sess-l", turn_id: TURN2, api_request_id: `${TURN2}:api:1`, model: "gpt-4o-mini", started_at: T0, ended_at: T0 + 2, usage: { input_tokens: 9000, output_tokens: 10 }, response: { assistant_message: { content: "A monorepo." } } },
+      ],
+    });
+    const { runs } = await env.get<{ runs: (RunRow & { id: string })[] }>("/api/runs");
+    const context = (name: string) => env.get<Context>(`/api/runs/${runs.find((run) => run.name === name)!.id}/context`);
+    const part = (result: Context, key: string) => result.parts.find((p) => p.key === key)!;
+
+    const second = await context("Open a.txt");
+    expect(second).toMatchObject({ calls: 1, rebuilt: 1, measured: false });
+    expect(part(second, "history").items.map((item) => item.label).sort()).toEqual(["Earlier requests", "Results from terminal", "The agent's replies and tool calls"]);
+    expect(part(second, "request").items.map((item) => item.label)).toEqual(["What you wrote"]);
+
+    // Counted by the provider: what the chat doesn't explain is the agent's setup.
+    const cut = await context("Summarize the repo");
+    expect(cut).toMatchObject({ calls: 1, rebuilt: 1, measured: true });
+    expect(part(cut, "system").items.map((item) => item.label)).toEqual(["Instructions and setup (not recorded, sized from the token count)"]);
+    expect(part(cut, "system").tokens).toBeGreaterThan(8900);
+  });
+
   it("accepts gzipped batches and refuses bodies that inflate past the cap", async () => {
     const env = await setup();
     const events = [{ hook: "pre_llm_call", ts: T0, session_id: "sess-gz", turn_id: "sess-gz:task:1", user_message: "Compressed hello" }];

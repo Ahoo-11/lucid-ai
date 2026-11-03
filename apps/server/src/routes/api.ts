@@ -6,13 +6,14 @@ import { and, asc, count, desc, eq, gte, ilike, inArray, isNotNull, isNull, lt, 
 import { Hono, type MiddlewareHandler } from "hono";
 import { streamSSE } from "hono/streaming";
 import type { AppContext, AppEnv } from "../context";
-import { type CallInput, contextBreakdown } from "../contextBreakdown";
+import { type CallInput, contextBreakdown, rebuildMessages } from "../contextBreakdown";
 import { schema } from "../db";
 import { CLOSED, resolveAccount } from "../auth";
 import { arenaRoutes } from "../ee/arena/routes";
 import { createExplainer } from "../explain";
 import { createFixTester, failingDecisions } from "../fixtest";
 import { AFFECTED_MAX, type CauseOf, createReviewer } from "../review";
+import { createRater, estimate } from "../priority";
 import { createLinker, groupByCause } from "../roots";
 import { errorSignature, hintFor } from "../insights";
 import { LESSON_HARNESSES, applyLesson, cleanLesson, lessonsForIssues, runsSince, setLessonStatus } from "../lessons";
@@ -32,6 +33,8 @@ const STATUSES = new Set(["ok", "error", "running"]);
 const USAGE_DAYS = new Set([1, 7, 30]);
 /** A run's context breakdown reads every call's messages; past this many calls the rest go unsplit. */
 const CONTEXT_MAX_CALLS = 500;
+/** Earlier runs of a session read to rebuild a call's chat: agents compact long chats, so older turns weren't in the prompt anyway. */
+const REBUILD_TURNS = 20;
 
 const tokensIn = (step: { inputTokens: number | null; cacheReadTokens: number | null; cacheWriteTokens: number | null }) =>
   (step.inputTokens ?? 0) + (step.cacheReadTokens ?? 0) + (step.cacheWriteTokens ?? 0);
@@ -96,6 +99,7 @@ export function apiRoutes(ctx: AppContext) {
   const tester = createFixTester(ctx);
   const reviewer = createReviewer(ctx);
   const linker = createLinker(ctx);
+  const rater = createRater(ctx);
 
   app.use("*", requireProject(ctx));
 
@@ -301,7 +305,7 @@ export function apiRoutes(ctx: AppContext) {
   app.get("/runs/:id/context", async (c) => {
     const projectId = c.get("projectId");
     const [run] = await db
-      .select({ id: runs.id, input: runs.input })
+      .select({ id: runs.id, input: runs.input, sessionId: runs.sessionId, startedAt: runs.startedAt })
       .from(runs)
       .where(and(eq(runs.projectId, projectId), eq(runs.id, c.req.param("id"))));
     if (!run) return c.json({ error: "Run not found" }, 404);
@@ -350,8 +354,65 @@ export function apiRoutes(ctx: AppContext) {
         calls.push({ stepId: step.externalId, messages, tools: Array.isArray(toolList) ? toolList : null, inSubAgent: inSubAgent(step), inputTokens: step.inputTokens, cacheReadTokens: step.cacheReadTokens, cacheWriteTokens: step.cacheWriteTokens });
       }
     }
+    // Calls whose messages never came (Hermes cuts big requests to a preview; its history keeps none): rebuilt from the chat.
+    if (calls.some((call) => !call.messages?.length)) {
+      const rebuilt = rebuildMessages(await conversationOf(projectId, run));
+      for (const call of calls) {
+        const messages = call.messages?.length ? undefined : rebuilt.get(call.stepId);
+        if (messages?.length) Object.assign(call, { messages, rebuilt: true });
+      }
+    }
     return c.json(contextBreakdown(calls, run.input));
   });
+
+  /**
+   * A run's chat as recorded, for rebuilding what its model calls were sent:
+   * the last REBUILD_TURNS runs of its session before it, then itself, each
+   * with its steps in order and their full inputs and outputs.
+   */
+  async function conversationOf(projectId: string, run: { id: string; input: string | null; sessionId: string | null; startedAt: Date | null }) {
+    const earlier =
+      run.sessionId && run.startedAt
+        ? await db
+            .select({ id: runs.id, input: runs.input })
+            .from(runs)
+            .where(and(eq(runs.projectId, projectId), eq(runs.sessionId, run.sessionId), lt(runs.startedAt, run.startedAt)))
+            .orderBy(desc(runs.startedAt))
+            .limit(REBUILD_TURNS)
+        : [];
+    const turns = [...earlier.reverse(), run];
+    const rows = await db
+      .select({
+        runId: steps.runId,
+        externalId: steps.externalId,
+        parentExternalId: steps.parentExternalId,
+        kind: steps.kind,
+        toolName: steps.toolName,
+        toolCallId: steps.toolCallId,
+        inputHash: steps.inputHash,
+        outputHash: steps.outputHash,
+      })
+      .from(steps)
+      .where(inArray(steps.runId, turns.map((turn) => turn.id)))
+      .orderBy(sql`${steps.startedAt} asc nulls last`, asc(steps.seq), asc(steps.createdAt));
+    // Replies and tool results, and a sub-agent's task: stored whole, as text or JSON.
+    const keys = [...new Set(rows.flatMap((row) => [row.outputHash, row.kind === "agent" ? row.inputHash : null]).filter((key): key is string => !!key))];
+    const content = new Map<string, unknown>();
+    for (let i = 0; i < keys.length; i += 200) {
+      const found = await db
+        .select({ hash: blobs.hash, content: blobs.content })
+        .from(blobs)
+        .where(and(eq(blobs.projectId, projectId), inArray(blobs.hash, keys.slice(i, i + 200))));
+      for (const blob of found) content.set(blob.hash, parseJson(blob.content) ?? blob.content);
+    }
+    const of = (key: string | null) => (key ? content.get(key) : undefined);
+    return turns.map((turn) => ({
+      input: turn.input,
+      steps: rows
+        .filter((row) => row.runId === turn.id)
+        .map((row) => ({ stepId: row.externalId, parentId: row.parentExternalId, kind: row.kind, toolName: row.toolName, toolCallId: row.toolCallId, input: of(row.inputHash), output: of(row.outputHash) })),
+    }));
+  }
 
   /**
    * Failed steps grouped by what failed and how, most runs first, with the
@@ -521,6 +582,28 @@ export function apiRoutes(ctx: AppContext) {
     const diagnoses = await explainer.diagnoses(projectId, issues.slice(0, 200), { auto: autoDiagnose && !joining, ignored });
     const applied = await lessonsForIssues(db, projectId, issues.slice(0, 200).map((issue) => issue.id));
     const tests = await tester.latest(projectId, issues.slice(0, 200).map((issue) => issue.id));
+    // How much each matters: the model rates recurring ones without a fix live, side by side, once they're grouped.
+    const week = (issue: { affected: { at: Date | null }[] }) => issue.affected.filter((run) => run.at && Date.now() - run.at.getTime() < 7 * 24 * 3_600_000).length;
+    const ratings = await rater.ratings(projectId, open.map((issue) => issue.id));
+    const ratable = open
+      .filter((issue) => issue.runs >= 2 && applied.get(issue.id)?.status !== "active")
+      .map((issue) => {
+        const known = diagnoses.get(issue.id);
+        const ai = known?.status === "ready" ? known : null;
+        return {
+          id: issue.id,
+          harness: issue.harness,
+          title: ai?.title ?? issue.title,
+          summary: ai?.summary ?? ai?.why ?? issue.why,
+          toolName: issue.toolName,
+          runs: issue.runs,
+          week: week(issue),
+          lastSeen: issue.lastSeen,
+          problems: issue.symptoms.length,
+          runId: issue.examples[0]?.runId ?? null,
+        };
+      });
+    const rating = (!joining && autoDiagnose && rater.maybe(projectId, ratable, ratings)) || rater.busy(projectId);
     const shown = await Promise.all(
       issues.map(async ({ failedAt, decisions: _decisions, evidence: _evidence, runIds: _runIds, members: _members, related: _related, cause: _cause, ...issue }) => {
         const lesson = applied.get(issue.id);
@@ -534,11 +617,12 @@ export function apiRoutes(ctx: AppContext) {
           lessonsApply: LESSON_HARNESSES.has(issue.harness),
           ignored: ignored.has(issue.id),
           fixTest: tests.get(issue.id) ?? null,
+          importance: ratings.get(issue.id) ?? estimate({ week: week(issue), lastSeen: issue.lastSeen }),
         };
       }),
     );
-    // While grouping, diagnoses wait: the dashboard asks again soon.
-    return c.json({ issues: shown, diagnosisModel: explainer.enabled ? ctx.ai?.model : null, autoDiagnose, grouping: joining || linker.busy(projectId) });
+    // While grouping, diagnoses wait; while rating, the order may change: the dashboard asks again soon.
+    return c.json({ issues: shown, diagnosisModel: explainer.enabled ? ctx.ai?.model : null, autoDiagnose, grouping: joining || linker.busy(projectId), rating });
   });
 
   // Testing a fix: the decisions where it went wrong, replayed with it added. Nothing reaches an agent without a pass.

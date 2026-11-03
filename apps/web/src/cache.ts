@@ -5,9 +5,9 @@
 import { type DehydratedState, type QueryClient, dehydrate, hydrate, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 
-/** A new version whenever a kept list changes shape (v2: Inbox entries by root cause); older copies are dropped. */
-const STORAGE_KEY = "lucid.cache.v2";
-const OLD_KEYS = ["lucid.cache.v1"];
+/** A new version whenever a kept list changes shape (v3: Inbox entries rated by importance); older copies are dropped. */
+const STORAGE_KEY = "lucid.cache.v3";
+const OLD_KEYS = ["lucid.cache.v1", "lucid.cache.v2"];
 const MAX_AGE_MS = 24 * 60 * 60_000;
 const MAX_CHARS = 1_500_000;
 /** Small, often-shown lists. Run details and Arena are left out: bigger, and opened on purpose. */

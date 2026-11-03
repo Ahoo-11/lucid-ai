@@ -27,6 +27,8 @@ export type ContextBreakdown = {
   /** Model calls split here; `uncaptured` more had no messages to split. */
   calls: number;
   uncaptured: number;
+  /** Of `calls`, how many were rebuilt from the conversation (see rebuildMessages): instructions and tool definitions aren't in them. */
+  rebuilt: number;
   /** Fitted to provider token counts; false when no call reported any (then it's all estimates). */
   measured: boolean;
   total: number;
@@ -47,7 +49,12 @@ export type CallInput = {
   inputTokens: number | null;
   cacheReadTokens: number | null;
   cacheWriteTokens: number | null;
+  /** The messages were rebuilt from the conversation, not captured: what the provider counted beyond them was the setup. */
+  rebuilt?: boolean;
 };
+
+/** A step as the conversation rebuild reads it, by external ids, in run order. */
+export type TurnStep = { stepId: string; parentId: string | null; kind: string; toolName: string | null; toolCallId: string | null; input: unknown; output: unknown };
 
 const CHARS_PER_TOKEN = 4;
 /** Role markers and separators the provider adds around each message. */
@@ -182,14 +189,74 @@ export function splitCall(call: CallInput, typed: string | null): Record<Context
   return parts;
 }
 
+const asText = (value: unknown) => (typeof value === "string" ? value : value === null || value === undefined ? "" : JSON.stringify(value));
+
+/** A recorded model reply ({ text, toolCalls }) as the assistant message the next call sends back. */
+function assistantMessage(output: unknown) {
+  if (!isRecord(output)) return { role: "assistant", content: asText(output) };
+  const calls = (Array.isArray(output.toolCalls) ? output.toolCalls : []).filter(isRecord);
+  const toolCalls = calls.map((call) => ({ id: call.id, type: "function", function: { name: call.name, arguments: typeof call.input === "string" ? call.input : JSON.stringify(call.input ?? {}) } }));
+  return { role: "assistant", content: asText(output.text), ...(toolCalls.length ? { tool_calls: toolCalls } : {}) };
+}
+
+/**
+ * The messages behind each model call of the last turn, rebuilt from the
+ * conversation for calls whose messages weren't sent: Hermes cuts big
+ * requests to a preview, and its history keeps none. Every earlier turn's
+ * request, replies and tool results, then this turn's up to the call. A
+ * sub-agent's calls read only its task and its own work. The agent's
+ * instructions and tool definitions aren't in the conversation.
+ */
+export function rebuildMessages(turns: { input: string | null; steps: TurnStep[] }[]) {
+  const out = new Map<string, unknown[]>();
+  const main: unknown[] = [];
+  turns.forEach((turn, t) => {
+    if (turn.input) main.push({ role: "user", content: turn.input });
+    const byId = new Map(turn.steps.map((step) => [step.stepId, step]));
+    const subAgents = new Map<string, unknown[]>();
+    /** The conversation a step is in: the nearest sub-agent above it, or the main one. */
+    const conversation = (step: TurnStep) => {
+      const seen = new Set<string>();
+      for (let id = step.parentId; id && !seen.has(id); id = byId.get(id)?.parentId ?? null) {
+        seen.add(id);
+        const agent = byId.get(id);
+        if (agent?.kind !== "agent") continue;
+        const list = subAgents.get(id) ?? [{ role: "user", content: asText(agent.input) }];
+        subAgents.set(id, list);
+        return list;
+      }
+      return main;
+    };
+    for (const step of turn.steps) {
+      if (step.kind === "llm") {
+        const list = conversation(step);
+        if (t === turns.length - 1) out.set(step.stepId, [...list]);
+        list.push(assistantMessage(step.output));
+      } else if (step.kind === "tool" || (step.kind === "agent" && step.toolCallId)) {
+        // A sub-agent with no call id is where its work hangs, not a result the model read.
+        conversation(step).push({ role: "tool", tool_call_id: step.toolCallId ?? undefined, name: step.toolName ?? undefined, content: asText(step.output) });
+      }
+    }
+  });
+  return out;
+}
+
+/** What a rebuilt call's provider count holds beyond the conversation: Hermes' instructions, memory and skills. */
+const UNRECORDED_SETUP = "Instructions and setup (not recorded, sized from the token count)";
+
 /**
  * Fits one call's estimates to what the provider counted. When something was
- * cut short on capture, what's missing most likely belongs to it; otherwise
- * every part is scaled alike.
+ * cut short on capture, what's missing most likely belongs to it; for a
+ * rebuilt call, to the setup the conversation doesn't hold; otherwise every
+ * part is scaled alike.
  */
-function fit(parts: Record<ContextPartKey, Part>, measured: number) {
+function fit(parts: Record<ContextPartKey, Part>, measured: number, rebuilt = false) {
   const estimated = CONTEXT_PARTS.reduce((sum, key) => sum + parts[key].tokens, 0);
   if (!measured || !estimated) return;
+  if (rebuilt && measured > estimated) {
+    add(parts.system, UNRECORDED_SETUP, measured - estimated);
+    return;
+  }
   const cut = CONTEXT_PARTS.filter((key) => parts[key].cut && parts[key].tokens > 0);
   if (measured > estimated && cut.length) {
     const cutTotal = cut.reduce((sum, key) => sum + parts[key].tokens, 0);
@@ -218,7 +285,7 @@ export function contextBreakdown(calls: CallInput[], typed: string | null): Cont
   for (const call of split) {
     const parts = splitCall(call, typed);
     const total = measured ? tokensIn(call) : CONTEXT_PARTS.reduce((sum, key) => sum + parts[key].tokens, 0);
-    if (measured) fit(parts, total);
+    if (measured) fit(parts, total, call.rebuilt);
     // New input is whatever comes after the cached start of the prompt.
     const fresh = measured ? (call.inputTokens ?? 0) : total;
     let at = 0;
@@ -247,6 +314,7 @@ export function contextBreakdown(calls: CallInput[], typed: string | null): Cont
   return {
     calls: split.length,
     uncaptured: counted.length - split.length,
+    rebuilt: split.filter((call) => call.rebuilt).length,
     measured,
     total: parts.reduce((sum, part) => sum + part.tokens, 0),
     newTokens: parts.reduce((sum, part) => sum + part.newTokens, 0),

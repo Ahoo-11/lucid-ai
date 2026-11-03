@@ -8,6 +8,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { type Context, Hono } from "hono";
+import { DEFAULT_UPSTREAMS, upstreams } from "./proxy";
 
 const HERMES_PLUGIN = fileURLToPath(new URL("../../../packages/hermes-plugin/lucid/", import.meta.url));
 const HERMES_FILES = new Set(["__init__.py", "plugin.yaml"]);
@@ -15,14 +16,88 @@ const HERMES_FILES = new Set(["__init__.py", "plugin.yaml"]);
 const CLI_BUNDLE = fileURLToPath(new URL("../../../packages/cli/dist/lucid.mjs", import.meta.url));
 const INSTALLERS = fileURLToPath(new URL("./installers/", import.meta.url));
 
+/** Where the key goes in a setup's settings; the installer swaps in the one it receives on Approve. */
+export const KEY_SLOT = "__LUCID_KEY__";
+
+/**
+ * What the one command sets up, from its link (?for=…):
+ *   agents   Claude Code and Hermes on this computer (the default)
+ *   project  a project's own agent through the proxy (&ai=<provider>): its .env
+ *   tracing  a project's own agent that sends OpenTelemetry: its .env
+ *   openclaw OpenClaw through the proxy (&ai=<provider>): a settings file OpenClaw merges in
+ */
+export type ConnectSetup = { for: "agents" } | { for: "project" | "tracing"; env: string[] } | { for: "openclaw"; config: string };
+
+/** The base URL a provider's SDK expects: the upstream plus the path its SDK adds (none where the upstream has it). */
+export function proxyBase(endpoint: string, provider: string) {
+  const path = provider in DEFAULT_UPSTREAMS && provider !== "anthropic" && provider !== "gemini" ? "/v1" : "";
+  return `${endpoint}/p/${KEY_SLOT}/${provider}${path}`;
+}
+
+/** The setting a project's agent reads: the OpenAI and Anthropic SDKs read theirs by themselves; other clients are pointed at LUCID_BASE_URL. */
+export const baseVariable = (provider: string) => (provider === "openai" ? "OPENAI_BASE_URL" : provider === "anthropic" ? "ANTHROPIC_BASE_URL" : "LUCID_BASE_URL");
+
+/** OpenClaw's names for the providers, where they differ from Lucid's. */
+const OPENCLAW_NAMES: Record<string, string> = { gemini: "google" };
+
+/** Overrides OpenClaw's built-in provider address (~/.openclaw/openclaw.json, JSON5); its key and models stay. */
+export function openclawConfig(provider: string, base: string) {
+  // Lucid records chat completions, not OpenAI's Responses API, so the calls must use the former.
+  const api = provider === "anthropic" ? "anthropic-messages" : "openai-completions";
+  const extra = provider === "baseten" ? `\n        apiKey: "\${BASETEN_API_KEY}",\n        models: [{ id: "meta-models/muse-spark-open-1026", name: "Muse Spark" }],` : "";
+  return `{
+  models: {
+    mode: "merge",
+    providers: {
+      ${OPENCLAW_NAMES[provider] ?? provider}: {
+        baseUrl: "${base}",
+        api: "${api}",
+        headers: { "x-lucid-agent": "OpenClaw" },${extra}
+      },
+    },
+  },
+}`;
+}
+
+/** The setup a link asks for, or an error to show. Providers are the proxy's (proxy.ts upstreams). */
+export function connectSetup(query: { for?: string; ai?: string }, endpoint: string, providers: string[]): ConnectSetup | { error: string } {
+  const mode = query.for ?? "agents";
+  if (mode === "agents") return { for: "agents" };
+  if (mode === "tracing") {
+    return {
+      for: "tracing",
+      env: [
+        `OTEL_EXPORTER_OTLP_ENDPOINT=${endpoint}`,
+        "OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf",
+        `OTEL_EXPORTER_OTLP_HEADERS=x-api-key=${KEY_SLOT}`,
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true",
+        "OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental",
+      ],
+    };
+  }
+  if (mode !== "project" && mode !== "openclaw") return { error: `unknown setup ${mode}` };
+  const ai = query.ai ?? "";
+  // Pasted into the script: only a known provider's plain name.
+  if (!/^[a-z0-9-]{1,40}$/.test(ai) || !providers.includes(ai)) return { error: `unknown AI provider ${ai}` };
+  const base = proxyBase(endpoint, ai);
+  return mode === "project" ? { for: "project", env: [`${baseVariable(ai)}=${base}`] } : { for: "openclaw", config: openclawConfig(ai, base) };
+}
+
 /**
  * The one-command installers (connect.sh, connect.ps1) with this server's
- * address filled in. They find Claude Code and Hermes on the computer, ask the
- * person to approve it in the browser (see links.ts), then set each agent up.
+ * address and the setup filled in. They ask the person to approve the
+ * computer in the browser (see links.ts), then set it up: by default the
+ * Claude Code and Hermes they find, else what the link asked for.
  */
-export function connectScript(file: "connect.sh" | "connect.ps1", endpoint: string) {
+export function connectScript(file: "connect.sh" | "connect.ps1", endpoint: string, setup: ConnectSetup = { for: "agents" }) {
   // A Windows checkout may have turned the line endings into CRLF, which sh can't run.
-  return readFileSync(`${INSTALLERS}${file}`, "utf8").replace(/\r\n/g, "\n").replaceAll("__LUCID_ENDPOINT__", endpoint);
+  // Replaced by functions: settings text with a "$" in it goes in as written.
+  return readFileSync(`${INSTALLERS}${file}`, "utf8")
+    .replace(/\r\n/g, "\n")
+    .replaceAll("__LUCID_ENDPOINT__", () => endpoint)
+    .replaceAll("__LUCID_FOR__", () => setup.for)
+    .replaceAll("__LUCID_ENV__", () => ("env" in setup ? setup.env.join("\n") : ""))
+    .replaceAll("__LUCID_OPENCLAW__", () => ("config" in setup ? setup.config : ""));
 }
 
 /**
@@ -109,11 +184,13 @@ export function installRoutes() {
   for (const file of ["connect.sh", "connect.ps1"] as const) {
     app.get(`/${file}`, (c) => {
       const endpoint = publicEndpoint(c);
-      if (!SAFE_URL.test(endpoint)) {
-        const message = "Lucid: set LUCID_PUBLIC_URL on the server to a plain https URL";
-        return c.text(file === "connect.sh" ? `echo "${message}" >&2; exit 1\n` : `Write-Host "${message}" -ForegroundColor Red\n`, 500);
-      }
-      return c.text(connectScript(file, endpoint), 200, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-cache" });
+      const failed = (message: string, status: 400 | 500) =>
+        c.text(file === "connect.sh" ? `echo "Lucid: ${message}" >&2; exit 1\n` : `Write-Host "Lucid: ${message}" -ForegroundColor Red\n`, status);
+      if (!SAFE_URL.test(endpoint)) return failed("set LUCID_PUBLIC_URL on the server to a plain https URL", 500);
+      const setup = connectSetup({ for: c.req.query("for"), ai: c.req.query("ai") }, endpoint, Object.keys(upstreams()));
+      // The error names what was asked for, which only passes the checks as plain words.
+      if ("error" in setup) return failed(`${setup.error.replace(/[^\w .-]/g, "")}. Copy the command from Lucid again.`, 400);
+      return c.text(connectScript(file, endpoint, setup), 200, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-cache" });
     });
   }
 
