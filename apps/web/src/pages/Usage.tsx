@@ -1,11 +1,11 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { ChevronRight, Coins } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronRight, Coins } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { Link, useSearchParams } from "react-router";
-import { type Usage, api } from "../api";
-import { ago, cost, harnessLabel, plural, tokens } from "../format";
+import { type Usage as UsageData, api } from "../api";
+import { ago, cost, duration, harnessLabel, plural, tokens, toolLabel } from "../format";
 import { InOut, TokenBreakdown, percent, tokenTitle, tokensIn } from "../tokens";
-import { Card, Empty, LABEL, Segmented, StatTile, cx } from "../ui";
+import { Card, Empty, LABEL, PageHeader, Segmented, StatTile, cx } from "../ui";
 
 const PERIODS = [
   { days: 1, label: "24 hours" },
@@ -13,8 +13,17 @@ const PERIODS = [
   { days: 30, label: "30 days" },
 ];
 
-/** What the agents' model calls cost over a period, and which tokens, models and agents it went to. */
-export function Spend() {
+/** The Usage tab: what the agents' model calls cost over a period, and which tokens, models and agents it went to. */
+export function Usage() {
+  return (
+    <div className="space-y-8">
+      <PageHeader title="Usage" sub="What your agents' model calls cost, and where the tokens go." />
+      <UsageView />
+    </div>
+  );
+}
+
+function UsageView() {
   const [params, setParams] = useSearchParams();
   const days = PERIODS.find((period) => String(period.days) === params.get("days"))?.days ?? 7;
   // The last period stays on screen, dimmed, while the next one loads.
@@ -33,32 +42,80 @@ export function Spend() {
       <Segmented label="Period" options={PERIODS.map((period) => ({ value: period.days, label: period.label }))} value={days} onChange={setDays} />
 
       {!data || !totals ? (
-        <div className="text-sm text-zinc-500">{usage.isError ? `Couldn't load spend: ${usage.error.message}` : "Loading…"}</div>
+        <div className="text-sm text-zinc-500">{usage.isError ? `Couldn't load usage: ${usage.error.message}` : "Loading…"}</div>
       ) : totals.runs === 0 ? (
         <Card>
-          <Empty icon={<Coins className="size-8" />} title="No runs in this period">
-            Spend and tokens show up here once your agents run.
+          <Empty icon={<Coins className="size-8" />} title="No requests in this period">
+            Cost and tokens show up here once your agents work.
           </Empty>
         </Card>
       ) : (
         <div className={cx("space-y-6 transition-opacity", usage.isPlaceholderData && "opacity-60")}>
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <StatTile label="Spend" value={`${cost(totals.costUsd)}${totals.unpricedRuns ? "+" : ""}`} sub={`${plural(totals.runs, "run")} · ${perRun(totals)} a run`} />
+            <StatTile
+              label="Total cost"
+              value={`${cost(totals.costUsd)}${totals.unpricedRuns ? "+" : ""}`}
+              sub={`${perRun(totals)} a request`}
+              hint={totals.unpricedRuns ? "Some requests used a model with no known price, so this is a minimum" : "Model cost of every request in the period"}
+              aside={<Change now={totals.costUsd ?? 0} before={data.previous.costUsd ?? 0} days={days} show={cost} />}
+            />
             <StatTile
               label="Input tokens"
               value={tokens(tokensIn(totals))}
               hint={tokenTitle(totals)}
               sub={`${percent(totals.cacheReadTokens / Math.max(1, tokensIn(totals)))} read from cache`}
+              aside={<Change now={tokensIn(totals)} before={tokensIn(data.previous)} days={days} show={tokens} />}
             />
             <StatTile
               label="Output tokens"
               value={tokens(totals.outputTokens)}
               sub={totals.reasoningTokens ? `${tokens(totals.reasoningTokens)} of it thinking` : `${tokens(totals.outputTokens / Math.max(1, totals.llmCalls))} per model call`}
+              aside={<Change now={totals.outputTokens} before={data.previous.outputTokens} days={days} show={tokens} />}
             />
-            <StatTile label="Model calls" value={totals.llmCalls.toLocaleString()} sub={`${tokens(tokensIn(totals) / Math.max(1, totals.llmCalls))} tokens read per call`} />
+            <StatTile
+              label="Model calls"
+              value={totals.llmCalls.toLocaleString()}
+              sub={`${tokens(tokensIn(totals) / Math.max(1, totals.llmCalls))} read per call · biggest ${tokens(totals.largestContext)}`}
+              hint="How many times the agents asked a model what to do next, and how many tokens a call read on average and at most"
+              aside={<Change now={totals.llmCalls} before={data.previous.llmCalls} days={days} show={(n) => n.toLocaleString()} />}
+            />
+            <StatTile
+              label="Sessions"
+              value={totals.sessions.toLocaleString()}
+              sub={`${plural(totals.runs, "request")} · ${duration(totals.agentMs)} of agent time`}
+              hint="Conversations with a request in the period, and how long the agents worked on them, added up"
+              aside={<Change now={totals.sessions} before={data.previous.sessions} days={days} show={(n) => n.toLocaleString()} />}
+            />
+            <StatTile
+              label="Tool calls"
+              value={totals.toolCalls.toLocaleString()}
+              sub={`${(totals.toolCalls / Math.max(1, totals.runs)).toFixed(1)} per request`}
+              hint="Actions the agents took: reading files, running commands, calling APIs, launching sub-agents"
+              aside={<Change now={totals.toolCalls} before={data.previous.toolCalls} days={days} show={(n) => n.toLocaleString()} />}
+            />
+            <StatTile
+              label="Failed steps"
+              value={totals.failedSteps.toLocaleString()}
+              tone={totals.failedSteps ? "bad" : undefined}
+              sub={totals.failedRuns ? `In ${plural(totals.failedRuns, "request")} (${percent(totals.failedRuns / Math.max(1, totals.runs))})` : "Nothing failed"}
+              hint="Tool calls or model calls that returned an error, and the requests they were in"
+              aside={<Change now={totals.failedSteps} before={data.previous.failedSteps} days={days} show={(n) => n.toLocaleString()} />}
+            />
+            <StatTile
+              label="Saved by the cache"
+              value={totals.cacheSavedUsd == null ? "—" : cost(Math.max(0, totals.cacheSavedUsd))}
+              sub={
+                totals.cacheSavedUsd == null
+                  ? "No known prices for these models"
+                  : totals.cacheSavedUsd > 0
+                    ? `${tokens(totals.cacheReadTokens)} tokens read from cache`
+                    : "Writing the cache cost more than it saved"
+              }
+              hint="What the agents would have paid, at list prices, had the prompt cache not served the repeated part of each prompt, minus the premium for writing it"
+            />
           </div>
 
-          <Panel title="Spend over time">
+          <Panel title="Cost over time">
             <SpendChart data={data} />
           </Panel>
 
@@ -75,15 +132,20 @@ export function Spend() {
           <Panel title="By agent" flush>
             <AgentTable data={data} />
           </Panel>
+          {data.tools.length > 0 && (
+            <Panel title="Most used tools" flush>
+              <ToolTable data={data} />
+            </Panel>
+          )}
 
           {data.top.length > 0 && (
-            <Panel title="Most expensive runs" flush>
+            <Panel title="Most expensive requests" flush>
               <ul className="divide-y divide-zinc-100 border-t border-zinc-100 dark:divide-white/[0.06] dark:border-white/[0.06]">
                 {data.top.map((run) => (
                   <li key={run.id}>
                     <Link to={`/runs/${run.id}`} className="flex items-center gap-3 px-6 py-3.5 transition-colors hover:bg-zinc-50/80 dark:hover:bg-white/[0.03]">
                       <div className="min-w-0 flex-1">
-                        <div className="truncate text-sm font-medium">{run.name ?? "Untitled run"}</div>
+                        <div className="truncate text-sm font-medium">{run.name ?? "Untitled request"}</div>
                         <div className="mt-0.5 truncate text-xs text-zinc-500 dark:text-zinc-400">
                           {[harnessLabel(run.harness), run.model, ago(run.startedAt)].filter(Boolean).join(" · ")}
                         </div>
@@ -102,7 +164,7 @@ export function Spend() {
 
           {totals.unpricedRuns > 0 && (
             <p className="text-xs text-zinc-500 dark:text-zinc-400">
-              {plural(totals.unpricedRuns, "run")} used a model with no known price, so its cost isn't counted (the totals show a +).
+              {plural(totals.unpricedRuns, "request")} used a model with no known price, so its cost isn't counted (the totals show a +).
             </p>
           )}
         </div>
@@ -111,7 +173,40 @@ export function Spend() {
   );
 }
 
-/** Average cost of a run; unknown ("—") when no price was known. */
+/**
+ * Up or down since the period before ("↑ 23%"). Plain ink, not red or green:
+ * more tokens can be more work done, not a problem.
+ */
+function Change({ now, before, days, show }: { now: number; before: number; days: number; show: (n: number) => string }) {
+  if (!now && !before) return null;
+  const span = days === 1 ? "24 hours" : `${days} days`;
+  const title = `The ${span} before: ${show(before)}`;
+  if (!before) {
+    return (
+      <span className="shrink-0 text-xs text-zinc-400" title={title}>
+        new
+      </span>
+    );
+  }
+  const ratio = now / before;
+  const Arrow = ratio > 1 ? ArrowUp : ArrowDown;
+  // "↑ 47×" reads better than "↑ 4600%".
+  const size = ratio >= 2 ? `${ratio < 10 ? ratio.toFixed(1) : Math.round(ratio).toLocaleString("en-US")}×` : percent(Math.abs(ratio - 1));
+  return (
+    <span className="inline-flex shrink-0 items-center gap-0.5 text-xs text-zinc-500 tabular-nums dark:text-zinc-400" title={title}>
+      {Math.abs(ratio - 1) < 0.005 ? (
+        "same"
+      ) : (
+        <>
+          <Arrow className="size-3" />
+          {size}
+        </>
+      )}
+    </span>
+  );
+}
+
+/** Average cost of a request; unknown ("—") when no price was known. */
 const perRun = (row: { costUsd: number | null; runs: number }) => (row.costUsd == null ? cost(null) : cost(row.costUsd / Math.max(1, row.runs)));
 
 function Panel({ title, note, flush, children }: { title: string; note?: string; flush?: boolean; children: ReactNode }) {
@@ -127,7 +222,7 @@ function Panel({ title, note, flush, children }: { title: string; note?: string;
 type Bucket = { start: Date; label: string; short: string; costUsd: number; tokensIn: number; tokensOut: number; runs: number };
 
 /** The period in the viewer's own hours (24 hours) or days, with each UTC hour from the server added in. */
-function buckets(data: Usage): Bucket[] {
+function buckets(data: UsageData): Bucket[] {
   const hourly = data.days === 1;
   const out: Bucket[] = [];
   const make = (start: Date): Bucket => ({
@@ -176,7 +271,7 @@ function niceMax(value: number) {
   return ([1, 2, 2.5, 5, 10].find((m) => m * power >= value) ?? 10) * power;
 }
 
-function SpendChart({ data }: { data: Usage }) {
+function SpendChart({ data }: { data: UsageData }) {
   const [hover, setHover] = useState<number | null>(null);
   const [table, setTable] = useState(false);
   const rows = buckets(data);
@@ -185,7 +280,7 @@ function SpendChart({ data }: { data: Usage }) {
   // A label every few bars, so they never collide.
   const every = data.days === 1 ? 6 : rows.length > 10 ? 5 : 1;
   const shown = hover === null ? null : rows[hover]!;
-  const describe = (row: Bucket) => `${row.label}: ${cost(row.costUsd)}, ${tokens(row.tokensIn)} tokens in, ${tokens(row.tokensOut)} out, ${plural(row.runs, "run")}`;
+  const describe = (row: Bucket) => `${row.label}: ${cost(row.costUsd)}, ${tokens(row.tokensIn)} tokens in, ${tokens(row.tokensOut)} out, ${plural(row.runs, "request")}`;
   return (
     <div>
       <div className="flex">
@@ -227,7 +322,7 @@ function SpendChart({ data }: { data: Usage }) {
               <div className="text-sm font-semibold tabular-nums">{cost(shown.costUsd)}</div>
               <div className="text-zinc-500 dark:text-zinc-400">{shown.label}</div>
               <div className="mt-1 tabular-nums">
-                {tokens(shown.tokensIn)} in · {tokens(shown.tokensOut)} out · {plural(shown.runs, "run")}
+                {tokens(shown.tokensIn)} in · {tokens(shown.tokensOut)} out · {plural(shown.runs, "request")}
               </div>
             </div>
           )}
@@ -250,10 +345,10 @@ function SpendChart({ data }: { data: Usage }) {
             <thead className="sticky top-0 bg-zinc-50 text-zinc-500 dark:bg-zinc-900 dark:text-zinc-400">
               <tr>
                 <th className="px-3 py-1.5 text-left font-medium">{data.days === 1 ? "Hour" : "Day"}</th>
-                <th className="px-3 py-1.5 text-right font-medium">Spend</th>
+                <th className="px-3 py-1.5 text-right font-medium">Cost</th>
                 <th className="px-3 py-1.5 text-right font-medium">Tokens in</th>
                 <th className="px-3 py-1.5 text-right font-medium">Tokens out</th>
-                <th className="px-3 py-1.5 text-right font-medium">Runs</th>
+                <th className="px-3 py-1.5 text-right font-medium">Requests</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-100 dark:divide-white/[0.06]">
@@ -281,7 +376,7 @@ const TD = "px-3 py-3 text-right tabular-nums whitespace-nowrap first:pl-6 first
 function Share({ value, total }: { value: number | null; total: number | null }) {
   const share = total && value ? value / total : 0;
   return (
-    <span className="flex items-center justify-end gap-2" title={`${percent(share)} of the spend`}>
+    <span className="flex items-center justify-end gap-2" title={`${percent(share)} of the cost`}>
       <span className="text-xs text-zinc-500 dark:text-zinc-400">{percent(share)}</span>
       <span className="h-1.5 w-12 overflow-hidden rounded-full bg-zinc-100 dark:bg-white/10">
         <span className="block h-full rounded-full bg-series-1" style={{ width: `${share * 100}%` }} />
@@ -290,7 +385,7 @@ function Share({ value, total }: { value: number | null; total: number | null })
   );
 }
 
-function ModelTable({ data }: { data: Usage }) {
+function ModelTable({ data }: { data: UsageData }) {
   if (!data.models.length) return <p className="px-6 pb-6 text-sm text-zinc-500">No model calls in this period.</p>;
   return (
     <div className="overflow-x-auto">
@@ -336,18 +431,51 @@ function ModelTable({ data }: { data: Usage }) {
   );
 }
 
-function AgentTable({ data }: { data: Usage }) {
+function ToolTable({ data }: { data: UsageData }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead className="border-y border-zinc-100 bg-zinc-50/60 dark:border-white/[0.06] dark:bg-white/[0.02]">
+          <tr>
+            <th className={TH}>Tool</th>
+            <th className={TH}>Calls</th>
+            <th className={TH}>Failed</th>
+            <th className={TH}>Avg time</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-zinc-100 dark:divide-white/[0.06]">
+          {data.tools.map((row) => (
+            <tr key={row.tool}>
+              <td className={cx(TD, "max-w-56")}>
+                <div className="truncate font-medium" title={row.tool}>
+                  {toolLabel(row.tool)}
+                </div>
+              </td>
+              <td className={TD}>{row.calls.toLocaleString()}</td>
+              <td className={cx(TD, row.failed > 0 && "text-rose-600 dark:text-rose-400")}>
+                {row.failed ? `${row.failed.toLocaleString()} (${percent(row.failed / row.calls)})` : "0"}
+              </td>
+              <td className={TD}>{duration(row.avgMs)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function AgentTable({ data }: { data: UsageData }) {
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
         <thead className="border-y border-zinc-100 bg-zinc-50/60 dark:border-white/[0.06] dark:bg-white/[0.02]">
           <tr>
             <th className={TH}>Agent</th>
-            <th className={TH}>Runs</th>
+            <th className={TH}>Requests</th>
             <th className={TH}>Tokens in</th>
             <th className={TH}>Tokens out</th>
             <th className={TH}>Cost</th>
-            <th className={TH}>Per run</th>
+            <th className={TH}>Per request</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-zinc-100 dark:divide-white/[0.06]">

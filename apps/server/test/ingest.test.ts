@@ -303,11 +303,14 @@ describe("redaction", () => {
 describe("usage", () => {
   type Sums = { runs: number; costUsd: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; llmCalls: number };
   type Split = { input: number; cacheRead: number; cacheWrite: number; output: number } | null;
+  type Work = Sums & { sessions: number; toolCalls: number; failedSteps: number; failedRuns: number; agentMs: number };
   type Usage = {
-    totals: Sums & { unpricedRuns: number; split: Split };
+    totals: Work & { unpricedRuns: number; split: Split; cacheSavedUsd: number | null; largestContext: number };
+    previous: Work;
     hours: (Sums & { at: string })[];
     agents: (Sums & { harness: string })[];
     models: { model: string; calls: number; unpriced: number; split: Split }[];
+    tools: { tool: string; calls: number; failed: number }[];
     top: { id: string }[];
   };
 
@@ -316,14 +319,16 @@ describe("usage", () => {
     const now = new Date();
     const run = (id: string, harness: string, startedAt: Date, extra: Partial<typeof schema.runs.$inferInsert>) => ({ id, projectId: env.projectId, harness, externalId: id, source: "hook", status: "ok", startedAt, ...extra });
     await env.db.insert(schema.runs).values([
-      run("r1", "hermes", now, { costUsd: 0.5, inputTokens: 1000, outputTokens: 200, cacheReadTokens: 5000, llmCallCount: 2 }),
-      run("r2", "claude-code", now, { costUsd: 0.25, inputTokens: 100, outputTokens: 50, llmCallCount: 1, costIncomplete: 1 }),
+      run("r1", "hermes", now, { costUsd: 0.5, inputTokens: 1000, outputTokens: 200, cacheReadTokens: 5000, llmCallCount: 2, toolCallCount: 2, errorCount: 1, durationMs: 2000 }),
+      run("r2", "claude-code", now, { costUsd: 0.25, inputTokens: 100, outputTokens: 50, llmCallCount: 1, costIncomplete: 1, durationMs: 1000 }),
       run("old", "hermes", new Date(Date.now() - 10 * 86_400_000), { costUsd: 9 }),
     ]);
     const step = (id: string, runId: string, extra: Partial<typeof schema.steps.$inferInsert>) => ({ id, projectId: env.projectId, runId, externalId: id, kind: "llm", name: "call", startedAt: now, ...extra });
     await env.db.insert(schema.steps).values([
       step("s1", "r1", { model: "gpt-4o", provider: "openai", inputTokens: 1000, outputTokens: 200, cacheReadTokens: 5000, costUsd: 0.5 }),
       step("s2", "r2", { model: "mystery-model", inputTokens: 100, outputTokens: 50 }),
+      step("t1", "r1", { kind: "tool", toolName: "terminal", status: "error" }),
+      step("t2", "r1", { kind: "tool", toolName: "terminal" }),
     ]);
 
     const week = await env.get<Usage>("/api/usage?days=7");
@@ -339,6 +344,11 @@ describe("usage", () => {
     expect(split.output).toBeCloseTo(0.002);
     expect(week.models.find((m) => m.model === "mystery-model")).toMatchObject({ calls: 1, unpriced: 1, split: null });
     expect(week.totals.split!.input).toBeCloseTo(0.0025);
+    // The work behind it, and the week before to compare with.
+    expect(week.totals).toMatchObject({ sessions: 2, toolCalls: 2, failedSteps: 1, failedRuns: 1, agentMs: 3000, largestContext: 6000 });
+    expect(week.totals.cacheSavedUsd).toBeCloseTo(0);
+    expect(week.tools).toEqual([{ tool: "terminal", calls: 2, failed: 1, avgMs: null }]);
+    expect(week.previous).toMatchObject({ runs: 1, costUsd: 9, sessions: 1 });
 
     expect((await env.get<Usage>("/api/usage?days=30")).totals.costUsd).toBeCloseTo(9.75);
     // Anything else is a week.

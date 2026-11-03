@@ -1,12 +1,11 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Activity, Search } from "lucide-react";
-import { Link, useSearchParams } from "react-router";
+import { Link, Navigate, useSearchParams } from "react-router";
 import { type SessionListItem, api } from "../api";
 import { ago, cost, duration, harnessLabel, plural } from "../format";
 import { SyncBanner } from "../syncs";
 import { InOut } from "../tokens";
-import { Card, Empty, PageHeader, RunDot, Segmented, StatTile, TabBar, TabItem, cx } from "../ui";
-import { Spend } from "./Spend";
+import { Card, Empty, PageHeader, RunDot, Segmented, StatTile } from "../ui";
 
 const STATUS_FILTERS = [
   { value: "", label: "All" },
@@ -14,53 +13,41 @@ const STATUS_FILTERS = [
   { value: "running", label: "Running" },
 ];
 
-/** The sessions, or what they cost (?view=spend). Every filter lives in the URL, so a view can be shared or bookmarked. */
+/** The sessions. Every filter lives in the URL, so a view can be shared or bookmarked. */
 export function Runs() {
-  const [params, setParams] = useSearchParams();
+  const [params] = useSearchParams();
   const overview = useQuery({ queryKey: ["overview"], queryFn: api.overview });
   const day = overview.data?.last24h;
-  const spend = params.get("view") === "spend";
-  const showSpend = (on: boolean) => {
-    // Each view keeps only its own settings in the URL.
-    const next = new URLSearchParams();
-    if (on) next.set("view", "spend");
-    setParams(next, { replace: true });
-  };
+  // Cost and tokens moved to the Usage tab; old links still land there.
+  if (params.get("view") === "spend") return <Navigate to={`/usage${params.get("days") ? `?days=${params.get("days")}` : ""}`} replace />;
 
   return (
     <div className="space-y-8">
-      <PageHeader
-        title="Sessions"
-        sub={spend ? "What your agents' model calls cost, and where the tokens go." : "Every conversation with your agents, newest first. Open one to read it like a chat."}
-      />
+      <PageHeader title="Sessions" sub="Every conversation with your agents, newest first. Open one to read it like a chat." />
 
-      {!spend && (
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          <StatTile label="Requests today" value={day?.runs ?? "—"} sub="Started in the last 24 hours" hint="Requests that started in the last 24 hours" />
-          <StatTile
-            label="With errors"
-            value={day?.errors ?? "—"}
-            sub="Failed, or had a failed step"
-            hint="Runs in the last 24 hours that failed or had a failed step"
-            tone={day?.errors ? "bad" : undefined}
-          />
-          <StatTile label="Spend today" value={cost(day?.costUsd)} sub="Model cost, last 24 hours" hint="Model cost of the last 24 hours. Claude Code's reported cost when available, otherwise list prices × tokens" />
-          <StatTile label="Avg duration" value={duration(day?.avgDurationMs)} sub="Request to last step" hint="Average time from the request to the agent's last step" />
-        </div>
-      )}
-
-      <div className="space-y-6">
-        <TabBar>
-          <TabItem current={!spend} onClick={() => showSpend(false)}>
-            All sessions
-          </TabItem>
-          <TabItem current={spend} onClick={() => showSpend(true)}>
-            Spend and tokens
-          </TabItem>
-        </TabBar>
-
-        {spend ? <Spend /> : <SessionList />}
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <StatTile label="Requests today" value={day?.runs ?? "—"} sub="Started in the last 24 hours" hint="Requests that started in the last 24 hours" />
+        <StatTile
+          label="With errors"
+          value={day?.errors ?? "—"}
+          sub="Failed, or had a failed step"
+          hint="Requests in the last 24 hours that failed or had a failed step"
+          tone={day?.errors ? "bad" : undefined}
+        />
+        <StatTile
+          label="Cost today"
+          value={cost(day?.costUsd)}
+          sub={
+            <Link to="/usage?days=1" className="hover:text-zinc-900 hover:underline dark:hover:text-white">
+              See usage
+            </Link>
+          }
+          hint="Model cost of the last 24 hours. Claude Code's reported cost when available, otherwise list prices × tokens"
+        />
+        <StatTile label="Avg duration" value={duration(day?.avgDurationMs)} sub="Request to last step" hint="Average time from the request to the agent's last step" />
       </div>
+
+      <SessionList />
     </div>
   );
 }

@@ -12,7 +12,7 @@ export function cost(usd: number | null | undefined) {
   // Cheap models cost fractions of a cent per run; "<$0.01" would hide the number people compare.
   if (usd < 0.0001) return "<$0.0001";
   if (usd < 0.01) return `$${Number(usd.toPrecision(2))}`;
-  if (usd >= 100) return `$${Math.round(usd)}`;
+  if (usd >= 100) return `$${Math.round(usd).toLocaleString("en-US")}`;
   return `$${usd.toFixed(2)}`;
 }
 
@@ -20,7 +20,8 @@ export function tokens(n: number | null | undefined) {
   if (!n) return "0";
   if (n < 1000) return String(Math.round(n));
   if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
-  return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n < 1_000_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  return `${(n / 1_000_000_000).toFixed(1)}B`;
 }
 
 export function ago(iso: string | null | undefined) {

@@ -147,11 +147,29 @@ export type TokenSums = {
   llmCalls: number;
 };
 
-/** The Spend view: one period's totals, by UTC hour, by agent, by model, and its costliest runs. */
+/** A period's totals beyond tokens: how much work, how much of it failed. */
+export type WorkSums = TokenSums & {
+  unpricedRuns: number;
+  sessions: number;
+  toolCalls: number;
+  failedSteps: number;
+  /** Requests that failed or had a failed step. */
+  failedRuns: number;
+  agentMs: number;
+};
+
+/** The Usage tab: one period's totals (and the period before's), by UTC hour, by agent, by model, its most used tools and its costliest runs. */
 export type Usage = {
   days: number;
   since: string;
-  totals: TokenSums & { unpricedRuns: number; split: CostSplit | null };
+  totals: WorkSums & {
+    split: CostSplit | null;
+    /** What the prompt cache saved at list prices; null when no price is known. */
+    cacheSavedUsd: number | null;
+    largestContext: number;
+  };
+  previous: WorkSums;
+  tools: { tool: string; calls: number; failed: number; avgMs: number | null }[];
   hours: (TokenSums & { at: string })[];
   agents: (TokenSums & { harness: string })[];
   models: {

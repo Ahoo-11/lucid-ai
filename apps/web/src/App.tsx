@@ -15,6 +15,7 @@ import { Inbox, needsFix } from "./pages/Inbox";
 import { LinkPage } from "./pages/Link";
 import { SessionRoute } from "./pages/Session";
 import { Runs } from "./pages/Runs";
+import { Usage } from "./pages/Usage";
 import { useSyncs } from "./syncs";
 import { setTheme, useTheme } from "./theme";
 import { cx } from "./ui";
@@ -149,7 +150,7 @@ function Shell({ account }: { account: ReactNode }) {
             <Tab to="/runs" also="/sessions" busy={syncing ? "Bringing in past runs" : undefined}>
               Sessions
             </Tab>
-            <Tab to="/arena">Arena</Tab>
+            <Tab to="/usage">Usage</Tab>
             <Tab to="/connect">Connect</Tab>
           </nav>
           <div className="ml-auto flex shrink-0 items-center gap-2 sm:gap-3">
@@ -173,6 +174,8 @@ function Shell({ account }: { account: ReactNode }) {
           <Route path="/runs/:id" element={<SessionRoute by="run" />} />
           <Route path="/sessions" element={<Navigate to="/runs" replace />} />
           <Route path="/sessions/:id" element={<SessionRoute by="session" />} />
+          <Route path="/usage" element={<Usage />} />
+          {/* Off the nav; still opened from a step's "Try this decision". */}
           <Route path="/arena" element={<Arena />} />
           <Route path="/arena/new" element={<NewExperiment />} />
           <Route path="/arena/:id" element={<ExperimentPage />} />

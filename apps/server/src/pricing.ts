@@ -57,6 +57,26 @@ export function costSplit(
   return priced ? split : null;
 }
 
+/**
+ * What the prompt cache saved at list prices: cached tokens read at the cache
+ * price instead of the input price, less the premium paid to write them.
+ * Null when none of these models has a known price.
+ */
+export function cacheSavings(
+  rows: Iterable<{ model: string | null; provider: string | null; cacheReadTokens: number | null; cacheWriteTokens: number | null }>,
+): number | null {
+  let saved = 0;
+  let priced = false;
+  for (const row of rows) {
+    const rates = resolveModelPricing({ provider: row.provider, model: row.model, catalog });
+    if (rates.source === "unavailable") continue;
+    priced = true;
+    saved += ((row.cacheReadTokens ?? 0) * (rates.inputPerMillion - (rates.cacheReadPerMillion ?? rates.inputPerMillion))) / 1e6;
+    saved -= ((row.cacheWriteTokens ?? 0) * ((rates.cacheWritePerMillion ?? rates.inputPerMillion) - rates.inputPerMillion)) / 1e6;
+  }
+  return priced ? saved : null;
+}
+
 /** Prices LLM steps written before the catalog loaded (or for models it lacked). */
 export async function repriceUnpriced(db: Db) {
   const rows = await db

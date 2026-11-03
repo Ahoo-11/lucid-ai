@@ -16,7 +16,7 @@ import { createReviewer } from "../review";
 import { errorSignature, hintFor } from "../insights";
 import { LESSON_HARNESSES, applyLesson, cleanLesson, lessonsForIssues, runsSince, setLessonStatus } from "../lessons";
 import { publicEndpoint } from "../install";
-import { costSplit, pricingCatalog } from "../pricing";
+import { cacheSavings, costSplit, pricingCatalog } from "../pricing";
 import { createApiKey } from "../keys";
 import { batchFor } from "../normalizers";
 import { upstreams } from "../proxy";
@@ -132,13 +132,19 @@ export function apiRoutes(ctx: AppContext) {
     return c.json({ last24h: totals, harnesses, topTools });
   });
 
-  /** Spend and tokens over the last 1, 7 or 30 days: totals, by hour, by agent, by model, and the costliest runs. */
+  /**
+   * The Usage tab over the last 1, 7 or 30 days: totals (and the same for the
+   * period before, to compare), by hour, by agent, by model, the most used
+   * tools, and the costliest runs.
+   */
   app.get("/usage", async (c) => {
     const projectId = c.get("projectId");
     const asked = Number(c.req.query("days"));
     const days = USAGE_DAYS.has(asked) ? asked : 7;
-    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    const period = days * 24 * 60 * 60 * 1000;
+    const since = new Date(Date.now() - period);
     const inPeriod = and(eq(runs.projectId, projectId), gte(runs.startedAt, since));
+    const before = and(eq(runs.projectId, projectId), gte(runs.startedAt, new Date(since.getTime() - period)), lt(runs.startedAt, since));
     const sums = {
       runs: count(),
       costUsd: sum(runs.costUsd).mapWith(Number),
@@ -149,10 +155,33 @@ export function apiRoutes(ctx: AppContext) {
       reasoningTokens: sum(runs.reasoningTokens).mapWith(Number),
       llmCalls: sum(runs.llmCallCount).mapWith(Number),
     };
-    const [totals] = await db
-      .select({ ...sums, unpricedRuns: sql<number>`(count(*) filter (where ${runs.costIncomplete} > 0))::int` })
-      .from(runs)
-      .where(inPeriod);
+    const periodSums = {
+      ...sums,
+      unpricedRuns: sql<number>`(count(*) filter (where ${runs.costIncomplete} > 0))::int`,
+      sessions: sql<number>`count(distinct coalesce(${runs.sessionId}, 'run:' || ${runs.id}))::int`,
+      toolCalls: sql<number>`coalesce(sum(${runs.toolCallCount}), 0)::int`,
+      failedSteps: sql<number>`coalesce(sum(${runs.errorCount}), 0)::int`,
+      failedRuns: sql<number>`(count(*) filter (where ${runs.status} = 'error' or ${runs.errorCount} > 0))::int`,
+      agentMs: sql<number>`coalesce(sum(${runs.durationMs}), 0)::bigint`.mapWith(Number),
+    };
+    const [totals] = await db.select(periodSums).from(runs).where(inPeriod);
+    const [previous] = await db.select(periodSums).from(runs).where(before);
+    const tools = await db
+      .select({
+        tool: steps.toolName,
+        calls: count(),
+        failed: sql<number>`(count(*) filter (where ${steps.status} = 'error'))::int`,
+        avgMs: sql<number | null>`avg(${steps.durationMs})::int`,
+      })
+      .from(steps)
+      .where(and(eq(steps.projectId, projectId), isNotNull(steps.toolName), gte(steps.startedAt, since)))
+      .groupBy(steps.toolName)
+      .orderBy(desc(count()))
+      .limit(8);
+    const [biggest] = await db
+      .select({ tokens: sql<number | null>`max(coalesce(${steps.inputTokens}, 0) + coalesce(${steps.cacheReadTokens}, 0) + coalesce(${steps.cacheWriteTokens}, 0))::int` })
+      .from(steps)
+      .where(and(eq(steps.projectId, projectId), eq(steps.kind, "llm"), gte(steps.startedAt, since)));
     // UTC hours: the browser groups them into the viewer's own days.
     const hour = sql<string>`to_char(date_trunc('hour', ${runs.startedAt} at time zone 'UTC'), 'YYYY-MM-DD"T"HH24":00:00Z"')`;
     const hours = await db.select({ at: hour, ...sums }).from(runs).where(inPeriod).groupBy(hour).orderBy(hour);
@@ -198,10 +227,12 @@ export function apiRoutes(ctx: AppContext) {
     return c.json({
       days,
       since: since.toISOString(),
-      totals: { ...totals, split: costSplit(modelRows) },
+      totals: { ...totals, split: costSplit(modelRows), cacheSavedUsd: cacheSavings(modelRows), largestContext: biggest?.tokens ?? 0 },
+      previous,
       hours,
       agents,
       models: modelRows.map((row) => ({ ...row, split: costSplit([row]) })),
+      tools,
       top,
     });
   });

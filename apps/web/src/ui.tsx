@@ -128,12 +128,16 @@ export function TabItem({ current, onClick, children }: { current: boolean; onCl
 /** Small mono caps over a number or a section: the one technical touch in the type. */
 export const LABEL = "font-mono text-[11px] font-medium tracking-[0.06em] text-zinc-500 uppercase dark:text-zinc-400";
 
-/** A number with its name, and a line on what it means. */
-export function StatTile({ label, value, sub, hint, tone }: { label: string; value: ReactNode; sub?: ReactNode; hint?: string; tone?: "bad" }) {
+/** A number with its name, and a line on what it means. `aside` sits opposite the name (a change since last period). */
+export function StatTile({ label, value, sub, hint, tone, aside }: { label: string; value: ReactNode; sub?: ReactNode; hint?: string; tone?: "bad"; aside?: ReactNode }) {
   return (
     <Card className="min-w-0 px-5 py-4">
-      <div className={LABEL} title={hint}>
-        {label}
+      {/* On a narrow tile the aside drops under the name rather than cutting it short. */}
+      <div className="flex flex-wrap items-start justify-between gap-x-2 gap-y-1">
+        <div className={LABEL} title={hint}>
+          {label}
+        </div>
+        {aside}
       </div>
       <div className={cx("mt-2.5 truncate font-display text-[1.75rem] leading-none font-bold tabular-nums", tone === "bad" && "text-rose-600 dark:text-rose-400")} title={hint}>
         {value}
