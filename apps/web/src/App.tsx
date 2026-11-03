@@ -1,9 +1,10 @@
 import { UserButton } from "@clerk/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2 } from "lucide-react";
+import { Loader2, Moon, Sun } from "lucide-react";
 import type { ReactNode } from "react";
 import { NavLink, Navigate, Route, Routes, useLocation } from "react-router";
 import { type AuthConfig, api, useLiveUpdates } from "./api";
+import { AsciiField } from "./ascii";
 import { ClerkGate } from "./auth";
 import { forgetCache, useAccountCache } from "./cache";
 import { Landing } from "./landing/Landing";
@@ -15,6 +16,7 @@ import { LinkPage } from "./pages/Link";
 import { RunPage } from "./pages/Run";
 import { Runs } from "./pages/Runs";
 import { useSyncs } from "./syncs";
+import { setTheme, useTheme } from "./theme";
 import { cx } from "./ui";
 
 function Home() {
@@ -31,15 +33,34 @@ function Tab({ to, children, badge, busy }: { to: string; children: string; badg
       to={to}
       className={({ isActive }) =>
         cx(
-          "relative flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors",
-          isActive ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900" : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800",
+          "relative flex flex-1 shrink-0 items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition sm:flex-none",
+          isActive
+            ? "bg-white text-zinc-900 shadow-[0_1px_2px_rgba(24,24,27,0.08)] ring-1 ring-black/5 dark:bg-zinc-800 dark:text-white dark:ring-white/5"
+            : "text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white",
         )
       }
     >
       {children}
       {busy && <Loader2 className="size-3.5 animate-spin opacity-70" aria-label={busy} />}
-      {badge ? <span className="rounded-full bg-rose-500 px-1.5 text-[10px] font-semibold leading-4 text-white">{badge}</span> : null}
+      {badge ? <span className="min-w-4 rounded-full bg-rose-500 px-1.5 text-center text-[10px] leading-4 font-semibold text-white tabular-nums">{badge}</span> : null}
     </NavLink>
+  );
+}
+
+/** Light is the default; the choice stays in this browser. */
+function ThemeToggle() {
+  const theme = useTheme();
+  const next = theme === "dark" ? "light" : "dark";
+  return (
+    <button
+      type="button"
+      onClick={() => setTheme(next)}
+      aria-label={`Switch to ${next} mode`}
+      title={`Switch to ${next} mode`}
+      className="grid size-8 shrink-0 place-items-center rounded-lg text-zinc-500 transition hover:bg-zinc-900/5 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-white/10 dark:hover:text-white"
+    >
+      {theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />}
+    </button>
   );
 }
 
@@ -91,11 +112,11 @@ function AccountMenu({ email }: { email: string }) {
     },
   });
   return (
-    <div className="flex items-center gap-2 text-xs text-zinc-500">
+    <div className="flex items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400">
       <span className="hidden max-w-40 truncate md:inline" title={email}>
         {email}
       </span>
-      <button type="button" onClick={() => logout.mutate()} className="rounded-md px-2 py-1 hover:bg-zinc-100 hover:text-zinc-900 dark:hover:bg-zinc-800 dark:hover:text-zinc-100">
+      <button type="button" onClick={() => logout.mutate()} className="rounded-lg px-2.5 py-1.5 font-medium transition hover:bg-zinc-900/5 hover:text-zinc-900 dark:hover:bg-white/10 dark:hover:text-zinc-100">
         Sign out
       </button>
     </div>
@@ -107,16 +128,19 @@ function Shell({ account }: { account: ReactNode }) {
   const issues = useQuery({ queryKey: ["issues"], queryFn: api.issues });
   const syncing = useSyncs().active.length > 0;
   return (
-    <div className="min-h-dvh">
-      <header className="sticky top-0 z-20 border-b border-zinc-200 bg-white/80 backdrop-blur dark:border-zinc-800 dark:bg-zinc-950/80">
-        <div className="mx-auto flex h-14 max-w-7xl items-center gap-2 px-4 sm:gap-6">
-          <NavLink to="/" className="flex items-center gap-2 font-display text-lg font-bold tracking-tight">
-            <span className="relative flex size-6 items-center justify-center rounded-full bg-brand-300 ring-1 ring-black/10">
+    // Its own stacking context, so the ASCII field sits above the page colour and under everything else.
+    <div className="relative isolate min-h-dvh">
+      <AsciiField />
+      <header className="sticky top-0 z-20 border-b border-zinc-900/[0.07] bg-paper/80 backdrop-blur-md dark:border-white/[0.07] dark:bg-zinc-950/80">
+        {/* On a phone the tabs get their own full-width row under the logo. */}
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-3 px-4 sm:h-16 sm:flex-nowrap sm:gap-5 sm:px-6 lg:px-8">
+          <NavLink to="/" className="flex h-14 shrink-0 items-center gap-2 font-display text-lg font-bold tracking-tight sm:h-auto">
+            <span className="relative flex size-7 items-center justify-center rounded-full bg-brand-300 ring-1 ring-black/10">
               <span className="size-2.5 rounded-full bg-zinc-950" />
             </span>
-            <span className="hidden sm:inline">Lucid</span>
+            Lucid
           </NavLink>
-          <nav className="flex items-center gap-1 overflow-x-auto">
+          <nav className="order-last mb-3 flex w-full min-w-0 items-center gap-0.5 overflow-x-auto rounded-xl bg-zinc-900/[0.05] p-1 [scrollbar-width:none] sm:order-none sm:mb-0 sm:w-auto dark:bg-white/[0.06]">
             <Tab to="/inbox" badge={issues.data?.issues.filter(needsFix).length}>
               Inbox
             </Tab>
@@ -126,17 +150,20 @@ function Shell({ account }: { account: ReactNode }) {
             <Tab to="/arena">Arena</Tab>
             <Tab to="/connect">Connect</Tab>
           </nav>
-          <div
-            className="ml-auto flex items-center gap-1.5 text-xs text-zinc-500"
-            title={live ? "New runs appear on their own" : "Not connected to the server; reload to retry"}
-          >
-            <span className={cx("size-2 rounded-full", live ? "bg-emerald-500" : "bg-zinc-300 dark:bg-zinc-700")} />
-            <span className="hidden sm:inline">{live ? "Live" : "Offline"}</span>
+          <div className="ml-auto flex shrink-0 items-center gap-2 sm:gap-3">
+            <div
+              className="flex items-center gap-1.5 text-xs font-medium text-zinc-500 dark:text-zinc-400"
+              title={live ? "New runs appear on their own" : "Not connected to the server; reload to retry"}
+            >
+              <span className={cx("size-1.5 rounded-full", live ? "bg-emerald-500" : "bg-zinc-300 dark:bg-zinc-700")} />
+              <span className="hidden md:inline">{live ? "Live" : "Offline"}</span>
+            </div>
+            <ThemeToggle />
+            {account}
           </div>
-          {account}
         </div>
       </header>
-      <main className="mx-auto max-w-7xl px-4 py-6">
+      <main className="mx-auto max-w-7xl px-4 pt-8 pb-16 sm:px-6 sm:pt-10 lg:px-8">
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/inbox" element={<Inbox />} />

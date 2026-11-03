@@ -4,21 +4,16 @@
 
 import { ClerkFailed, ClerkLoading, ClerkProvider, Show, SignIn, SignOutButton, useAuth } from "@clerk/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { type ReactNode, useEffect, useLayoutEffect, useRef, useSyncExternalStore } from "react";
+import { type ReactNode, useEffect, useLayoutEffect, useRef } from "react";
 import { useLocation } from "react-router";
 import { type Me, api, setTokenSource } from "./api";
 import { forgetCache, useAccountCache } from "./cache";
 import { Landing } from "./landing/Landing";
 import { AuthLayout, Splash } from "./pages/SignIn";
+import { useTheme } from "./theme";
 import { Card } from "./ui";
 
-const DARK = "(prefers-color-scheme: dark)";
-const subscribe = (onChange: () => void) => {
-  const media = matchMedia(DARK);
-  media.addEventListener("change", onChange);
-  return () => media.removeEventListener("change", onChange);
-};
-const useDark = () => useSyncExternalStore(subscribe, () => matchMedia(DARK).matches);
+const useDark = () => useTheme() === "dark";
 
 const FONT = '"Geist Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
 
@@ -42,7 +37,7 @@ const DARK_COLORS = {
 
 /**
  * Clerk's components in the app (the account menu) in Lucid's colors and font,
- * following the system theme. Primary is near-black in light mode: Clerk colors
+ * following the app's theme. Primary is near-black in light mode: Clerk colors
  * its links with it too, and lime text is unreadable on white.
  */
 function appearance(dark: boolean) {
@@ -83,7 +78,7 @@ const SIGN_IN_APPEARANCE = {
     dividerText: "text-zinc-500",
     formFieldLabel: "text-zinc-300",
     formFieldInput: "h-11 rounded-xl border-0 bg-zinc-950 shadow-none ring-1 ring-white/10 hover:ring-white/20 focus:ring-2 focus:ring-brand-300/60",
-    formButtonPrimary: "h-11 rounded-full bg-brand-300 font-semibold text-zinc-950 shadow-[0_10px_40px_-12px_rgba(216,248,74,0.6)] hover:bg-brand-200",
+    formButtonPrimary: "h-11 rounded-full bg-brand-300 font-semibold text-zinc-950 shadow-none hover:bg-brand-200",
     footerActionLink: "font-medium text-brand-300 hover:text-brand-200",
   },
 };

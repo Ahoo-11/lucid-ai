@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Check, Loader2 } from "lucide-react";
 import { type HistorySync, api } from "./api";
 import { harnessLabel } from "./format";
-import { cx } from "./ui";
+import { SURFACE, cx } from "./ui";
 
 export function useSyncs() {
   const query = useQuery({
@@ -39,7 +39,7 @@ export function SyncBanner() {
   return (
     <div className="space-y-2">
       {syncs.map((sync) => (
-        <div key={sync.id} className="flex items-center gap-4 rounded-xl border border-zinc-200 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900">
+        <div key={sync.id} className={cx(SURFACE, "flex items-center gap-4 px-5 py-4")}>
           <span
             className={cx(
               "flex size-8 shrink-0 items-center justify-center rounded-full",

@@ -6,7 +6,7 @@ import { type ConnectStatus, api } from "../api";
 import { ago, harnessLabel, plural } from "../format";
 import { BRANDS, type Brand, BrandMark } from "../landing/logos";
 import { AgentSync } from "../syncs";
-import { Card, cx } from "../ui";
+import { BUTTON, Card, LABEL, PageHeader, cx } from "../ui";
 import { ConnectWizard, LogoWell, findAgent } from "./ConnectWizard";
 
 const SOURCE_LABELS: Record<string, string> = {
@@ -65,19 +65,15 @@ export function Connect() {
   };
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="font-display text-2xl font-bold tracking-tight">Your agents</h1>
-          <p className="text-sm text-zinc-500 dark:text-zinc-400">Everything they send shows up in Runs.</p>
-        </div>
+    <div className="mx-auto max-w-4xl space-y-8">
+      <PageHeader title="Your agents" sub="Everything they send shows up in Runs.">
         {!empty && (
           <PrimaryButton onClick={() => setOpen(true)}>
             <Plus className="size-4" />
             Connect an agent
           </PrimaryButton>
         )}
-      </div>
+      </PageHeader>
 
       {status.data ? (
         empty ? (
@@ -86,9 +82,9 @@ export function Connect() {
           <Connected data={status.data} />
         )
       ) : (
-        <Card className="flex items-center gap-4 px-5 py-4" aria-busy>
-          <span className="size-11 animate-pulse rounded-xl bg-zinc-100 dark:bg-zinc-800" />
-          <span className="h-4 w-40 animate-pulse rounded bg-zinc-100 dark:bg-zinc-800" />
+        <Card className="flex items-center gap-4 px-6 py-5" aria-busy>
+          <span className="size-11 animate-pulse rounded-xl bg-zinc-100 dark:bg-white/[0.07]" />
+          <span className="h-4 w-40 animate-pulse rounded bg-zinc-100 dark:bg-white/[0.07]" />
         </Card>
       )}
       <Keys local={status.data?.localMode ?? true} />
@@ -100,11 +96,7 @@ export function Connect() {
 
 function PrimaryButton({ onClick, children }: { onClick: () => void; children: ReactNode }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="inline-flex items-center gap-2 rounded-full bg-brand-300 px-4 py-2 text-sm font-semibold text-zinc-950 shadow-[0_10px_30px_-12px_rgba(166,205,9,0.8)] transition hover:bg-brand-200"
-    >
+    <button type="button" onClick={onClick} className={cx(BUTTON.primary, "h-10 gap-2 px-5")}>
       {children}
     </button>
   );
@@ -114,7 +106,7 @@ const STACK = [BRANDS.claudeCode, BRANDS.hermes, BRANDS.langgraph, BRANDS.crewai
 
 function FirstAgent({ onStart }: { onStart: () => void }) {
   return (
-    <Card className="flex flex-col items-center px-6 py-14 text-center">
+    <Card className="flex flex-col items-center px-6 py-16 text-center">
       <div className="flex -space-x-2.5">
         {STACK.map((brand, index) => (
           // The padding is the card's color, cutting each logo out of the one behind it.
@@ -253,12 +245,12 @@ function PluginLines({ harness, endpoint }: { harness: string; endpoint: string 
 function Connected({ data }: { data: ConnectStatus }) {
   return (
     <Card className="overflow-hidden">
-      <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
+      <ul className="divide-y divide-zinc-100 dark:divide-white/[0.06]">
         {rows(data.sources).map((row) => {
           const recent = !!row.lastAt && Date.now() - new Date(row.lastAt).getTime() < RECENT_MS;
           const Icon = row.proxy ? Waypoints : Activity;
           return (
-            <li key={row.id} className="flex items-center gap-4 px-5 py-4">
+            <li key={row.id} className="flex items-center gap-4 px-6 py-5">
               <LogoWell size="size-11 rounded-xl">{row.brand ? <BrandMark brand={row.brand} className="size-6" /> : <Icon className="size-5 text-zinc-500" />}</LogoWell>
               <div className="min-w-0 flex-1">
                 <div className="truncate font-semibold">{row.name}</div>
@@ -276,9 +268,9 @@ function Connected({ data }: { data: ConnectStatus }) {
           );
         })}
       </ul>
-      <div className="flex items-center justify-between gap-3 border-t border-zinc-100 bg-zinc-50/60 px-5 py-3 text-sm dark:border-zinc-800 dark:bg-white/[0.02]">
+      <div className="flex items-center justify-between gap-3 border-t border-zinc-100 bg-zinc-50/60 px-6 py-3.5 text-sm dark:border-white/[0.06] dark:bg-white/[0.02]">
         <span className="text-zinc-500 dark:text-zinc-400">{plural(data.runs, "run")} so far</span>
-        <Link to="/runs" className="inline-flex items-center gap-1 font-medium text-brand-700 hover:underline dark:text-brand-300">
+        <Link to="/runs" className="inline-flex items-center gap-1 font-medium text-zinc-900 underline-offset-2 hover:underline dark:text-white">
           See runs
           <ArrowRight className="size-3.5" />
         </Link>
@@ -293,15 +285,15 @@ function Keys({ local }: { local: boolean }) {
   const revoke = useMutation({ mutationFn: api.revokeKey, onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["keys"] }) });
   if (!keys.data?.keys.length) return null;
   return (
-    <section className="space-y-2">
+    <section className="space-y-3">
       <div>
-        <h2 className="text-sm font-semibold">Lucid keys</h2>
-        <p className="text-sm text-zinc-500 dark:text-zinc-400">{local ? "Only agents on other machines need one." : "Each agent sends with one. Revoke a key to cut that agent off."}</p>
+        <h2 className={LABEL}>Lucid keys</h2>
+        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">{local ? "Only agents on other machines need one." : "Each agent sends with one. Revoke a key to cut that agent off."}</p>
       </div>
-      <Card>
-        <ul className="divide-y divide-zinc-100 text-sm dark:divide-zinc-800">
+      <Card className="overflow-hidden">
+        <ul className="divide-y divide-zinc-100 text-sm dark:divide-white/[0.06]">
           {keys.data.keys.map((key) => (
-            <li key={key.id} className="flex items-center gap-3 px-4 py-2.5">
+            <li key={key.id} className="flex items-center gap-3 px-6 py-3">
               <KeyRound className="size-3.5 shrink-0 text-zinc-400" />
               <span className="min-w-0 flex-1 truncate font-medium">{key.name}</span>
               <code className="hidden font-mono text-xs text-zinc-500 sm:inline">{key.prefix}…</code>

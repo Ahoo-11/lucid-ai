@@ -81,12 +81,15 @@ export function GridGlow({ from = "top" }: { from?: "top" | "center" }) {
 export function useDarkDocument() {
   useEffect(() => {
     const root = document.documentElement;
-    const previous = { background: root.style.backgroundColor, scheme: root.style.colorScheme };
+    const bar = document.querySelector('meta[name="theme-color"]');
+    const previous = { background: root.style.backgroundColor, scheme: root.style.colorScheme, bar: bar?.getAttribute("content") };
     root.style.backgroundColor = "#09090b";
     root.style.colorScheme = "dark";
+    bar?.setAttribute("content", "#09090b");
     return () => {
       root.style.backgroundColor = previous.background;
       root.style.colorScheme = previous.scheme;
+      if (previous.bar) bar?.setAttribute("content", previous.bar);
     };
   }, []);
 }

@@ -26,7 +26,7 @@ export function LinkPage() {
   const code = params.get("code");
   return (
     <div className="flex justify-center pt-4 sm:pt-12">
-      <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-xl ring-1 shadow-black/5 ring-zinc-200 motion-safe:animate-[rise_.3s_ease-out] sm:p-8 dark:bg-zinc-900 dark:shadow-black/40 dark:ring-white/10">
+      <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-[0_1px_2px_rgba(24,24,27,0.04),0_12px_32px_-12px_rgba(24,24,27,0.12)] ring-1 ring-zinc-200/80 motion-safe:animate-[rise_.3s_ease-out] sm:p-8 dark:bg-zinc-900 dark:shadow-none dark:ring-white/10">
         {code ? <Approve key={code} code={code} onRetry={() => setParams({}, { replace: true })} /> : <EnterCode onCode={(entered) => setParams({ code: entered }, { replace: true })} />}
       </div>
     </div>
@@ -89,7 +89,7 @@ function Approve({ code, onRetry }: { code: string; onRetry: () => void }) {
             )}
             <Link
               to="/connect"
-              className="group mt-2 inline-flex items-center gap-2 rounded-full bg-brand-300 px-5 py-2.5 text-sm font-semibold text-zinc-950 shadow-[0_10px_40px_-12px_rgba(216,248,74,0.6)] transition hover:bg-brand-200"
+              className="group mt-2 inline-flex items-center gap-2 rounded-full bg-brand-300 px-5 py-2.5 text-sm font-semibold text-zinc-950 ring-1 ring-black/5 ring-inset transition hover:bg-brand-200"
             >
               Go to your agents
               <ArrowRight className="size-4 transition-transform group-hover:translate-x-0.5" />
@@ -159,7 +159,7 @@ function Approve({ code, onRetry }: { code: string; onRetry: () => void }) {
           type="button"
           onClick={() => decide.mutate("approve")}
           disabled={decide.isPending}
-          className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-full bg-brand-300 font-semibold text-zinc-950 shadow-[0_10px_40px_-12px_rgba(216,248,74,0.6)] transition hover:bg-brand-200 disabled:opacity-60"
+          className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-full bg-brand-300 font-semibold text-zinc-950 ring-1 ring-black/5 ring-inset transition hover:bg-brand-200 disabled:opacity-60"
         >
           {decide.isPending && decide.variables === "approve" ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" strokeWidth={2.5} />}
           Approve
@@ -179,7 +179,7 @@ function Outcome({ icon, tone, title, sub, children }: { icon: ReactNode; tone: 
       <span
         className={cx(
           "flex size-16 items-center justify-center rounded-full",
-          tone === "good" ? "bg-brand-300 text-zinc-950 shadow-[0_10px_40px_-8px_rgba(216,248,74,0.7)]" : "bg-zinc-100 text-zinc-500 dark:bg-white/10 dark:text-zinc-300",
+          tone === "good" ? "bg-brand-300 text-zinc-950 ring-8 ring-brand-300/25" : "bg-zinc-100 text-zinc-500 dark:bg-white/10 dark:text-zinc-300",
         )}
       >
         {icon}

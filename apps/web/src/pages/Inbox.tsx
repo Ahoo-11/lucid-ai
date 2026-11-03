@@ -30,7 +30,7 @@ import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
 import { type AppliedLesson, type Diagnosis, type FixTest, type Issue, type ProblemKind, api } from "../api";
 import { ago, harnessLabel, plural } from "../format";
 import { BRANDS, BrandMark } from "../landing/logos";
-import { CopyButton, Empty, cx } from "../ui";
+import { BUTTON, CopyButton, Empty, LABEL, PageHeader, SURFACE, TabBar, TabItem, cx } from "../ui";
 
 /** Problems that hit more than one run are patterns worth fixing; the rest are listed separately. */
 export const isRecurring = (issue: Issue) => issue.runs >= 2;
@@ -80,6 +80,9 @@ const STAGE: Record<Stage, { label: string; tone: Tone; rank: number }> = {
 type View = "needs" | "fixing" | "fixed" | "once" | "ignored";
 
 const VIEW_OF: Record<Stage, View> = { needs: "needs", still: "needs", diagnosing: "needs", sent: "fixing", live: "fixing", fixed: "fixed", once: "once", ignored: "ignored" };
+
+/** A card's pill only when it says more than the list it's in: no "Needs a fix" on every card under Need a fix. */
+const SAYS_MORE = (stage: Stage) => !(["needs", "fixed", "once", "ignored"] as Stage[]).includes(stage);
 
 const TILES: { view: View; label: string; dot: string }[] = [
   { view: "needs", label: "Need a fix", dot: "bg-rose-500" },
@@ -184,17 +187,13 @@ export function Inbox() {
   );
 
   return (
-    <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] lg:items-start lg:gap-6 xl:grid-cols-[30rem_minmax(0,1fr)]">
-      <div className="min-w-0 space-y-5">
-        <div>
-          <div className="flex items-center justify-between gap-4">
-            <h1 className="text-xl font-semibold">Inbox</h1>
-            {model && query.data && <AutoDiagnose model={model} on={query.data.autoDiagnose} />}
-          </div>
-          <p className="text-sm text-zinc-500 dark:text-zinc-400">Problems your agents keep running into, and fixes you can approve.</p>
-        </div>
+    <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)] lg:items-start lg:gap-8 xl:grid-cols-[29rem_minmax(0,1fr)]">
+      <div className="min-w-0 space-y-6">
+        <PageHeader title="Inbox" sub="Problems your agents keep running into, and fixes you can approve.">
+          {model && query.data && <AutoDiagnose model={model} on={query.data.autoDiagnose} />}
+        </PageHeader>
 
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-3 gap-3">
           {TILES.map((tile) => (
             <button
               key={tile.view}
@@ -202,16 +201,17 @@ export function Inbox() {
               onClick={() => showView(tile.view)}
               aria-pressed={view === tile.view}
               className={cx(
-                "rounded-xl border bg-white px-3.5 py-3 text-left transition-colors dark:bg-zinc-900",
+                SURFACE,
+                "px-3 py-3.5 text-left transition-colors sm:px-4",
                 view === tile.view
                   ? "border-zinc-900 ring-1 ring-zinc-900 dark:border-zinc-200 dark:ring-zinc-200"
-                  : "border-zinc-200 hover:border-zinc-300 dark:border-zinc-800 dark:hover:border-zinc-700",
+                  : "hover:border-zinc-300 dark:hover:border-white/20",
               )}
             >
-              <span className="block text-2xl font-semibold tabular-nums">{query.isPending ? "–" : count(tile.view)}</span>
-              <span className="mt-0.5 flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
-                <span className={cx("size-1.5 shrink-0 rounded-full", tile.dot)} aria-hidden />
-                <span className="truncate">{tile.label}</span>
+              <span className="block font-display text-[1.75rem] leading-none font-bold tabular-nums">{query.isPending ? "–" : count(tile.view)}</span>
+              <span className="mt-2.5 flex items-baseline gap-1.5 text-xs leading-tight font-medium text-zinc-500 dark:text-zinc-400">
+                <span className={cx("size-1.5 shrink-0 -translate-y-px rounded-full", tile.dot)} aria-hidden />
+                <span>{tile.label}</span>
               </span>
             </button>
           ))}
@@ -227,7 +227,7 @@ export function Inbox() {
         {query.isPending ? (
           <div className="text-sm text-zinc-500">Loading…</div>
         ) : shown.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-zinc-300 dark:border-zinc-700">
+          <div className={SURFACE}>
             <Empty icon={<CheckCircle2 className="size-7 text-emerald-500" />} title={EMPTY[view][0]}>
               {EMPTY[view][1]}{" "}
               {view === "needs" && (
@@ -238,7 +238,7 @@ export function Inbox() {
             </Empty>
           </div>
         ) : (
-          <ul className="space-y-2">
+          <ul className="space-y-2.5">
             {shown.map((issue) => (
               <li key={issue.id}>
                 <ProblemCard issue={issue} model={model} selected={selected?.id === issue.id} onSelect={() => select(issue.id)} />
@@ -248,7 +248,7 @@ export function Inbox() {
         )}
 
         {(view === "needs" || view === "fixing" || view === "fixed") && (count("once") > 0 || count("ignored") > 0) && (
-          <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-zinc-500 dark:text-zinc-400">
+          <div className="flex flex-wrap gap-x-5 gap-y-1 px-1 text-sm text-zinc-500 dark:text-zinc-400">
             {count("once") > 0 && <MoreLink label={`One-off problems (${count("once")})`} onClick={() => showView("once")} />}
             {count("ignored") > 0 && <MoreLink label={`Ignored (${count("ignored")})`} onClick={() => showView("ignored")} />}
           </div>
@@ -256,16 +256,16 @@ export function Inbox() {
       </div>
 
       {wide ? (
-        <aside className="sticky top-20 h-[calc(100dvh-6.5rem)] min-w-0">
+        <aside className="sticky top-24 h-[calc(100dvh-7.5rem)] min-w-0">
           {panel || (
-            <div className="flex h-full items-center justify-center rounded-xl border border-dashed border-zinc-300 p-8 text-center text-sm text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
+            <div className="flex h-full items-center justify-center rounded-2xl border border-dashed border-zinc-300 p-8 text-center text-sm text-zinc-500 dark:border-white/15 dark:text-zinc-400">
               When a problem shows up, what happened and the fix open here.
             </div>
           )}
         </aside>
       ) : (
         panel && (
-          <div role="dialog" aria-modal="true" aria-label="Problem" className="fixed inset-0 z-30 bg-white motion-safe:animate-[rise_.18s_ease-out] dark:bg-zinc-950">
+          <div role="dialog" aria-modal="true" aria-label="Problem" className="fixed inset-0 z-30 bg-white motion-safe:animate-[rise_.18s_ease-out] dark:bg-zinc-900">
             {panel}
           </div>
         )
@@ -307,7 +307,7 @@ function AutoDiagnose({ model, on }: { model: string; on: boolean }) {
         aria-checked={value}
         aria-label={`Auto-diagnose with ${modelLabel(model)}`}
         onClick={() => toggle.mutate(!value)}
-        className={cx("relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors", value ? "bg-zinc-900 dark:bg-zinc-100" : "bg-zinc-200 dark:bg-zinc-700")}
+        className={cx("relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors", value ? "bg-zinc-900 dark:bg-zinc-100" : "bg-zinc-300 dark:bg-zinc-700")}
       >
         <span className={cx("size-4 rounded-full transition-transform", value ? "translate-x-[18px] bg-white dark:bg-zinc-900" : "translate-x-0.5 bg-white dark:bg-zinc-300")} />
       </button>
@@ -350,7 +350,7 @@ function iconFor(issue: Issue) {
 function ProblemIcon({ issue, large }: { issue: Issue; large?: boolean }) {
   const Icon = iconFor(issue);
   return (
-    <span className={cx("grid shrink-0 place-items-center rounded-lg bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300", large ? "size-10" : "size-9")} aria-hidden>
+    <span className={cx("grid shrink-0 place-items-center rounded-xl bg-zinc-100 text-zinc-600 dark:bg-white/[0.07] dark:text-zinc-300", large ? "size-11" : "size-9")} aria-hidden>
       <Icon className={large ? "size-5" : "size-[18px]"} />
     </span>
   );
@@ -409,20 +409,19 @@ function ProblemCard({ issue, model, selected, onSelect }: { issue: Issue; model
       onClick={onSelect}
       aria-current={selected || undefined}
       className={cx(
-        "flex w-full items-start gap-3 rounded-xl border bg-white p-3.5 text-left transition-colors dark:bg-zinc-900",
-        selected
-          ? "border-zinc-900 ring-1 ring-zinc-900 dark:border-zinc-200 dark:ring-zinc-200"
-          : "border-zinc-200 hover:border-zinc-300 dark:border-zinc-800 dark:hover:border-zinc-700",
+        SURFACE,
+        "flex w-full items-start gap-3.5 p-4 text-left transition-colors",
+        selected ? "border-zinc-900 ring-1 ring-zinc-900 dark:border-zinc-200 dark:ring-zinc-200" : "hover:border-zinc-300 dark:hover:border-white/20",
       )}
     >
       <ProblemIcon issue={issue} />
       <span className="min-w-0 flex-1">
-        <span className="flex items-start justify-between gap-2">
-          <span className="text-[15px] leading-snug font-medium">{(ai ?? issue).title}</span>
-          <Pill stage={stage} />
+        <span className="flex items-start justify-between gap-3">
+          <span className="pt-0.5 text-[15px] leading-snug font-semibold">{(ai ?? issue).title}</span>
+          {SAYS_MORE(stage) && <Pill stage={stage} />}
         </span>
-        <span className="mt-1 line-clamp-2 text-sm text-zinc-500 dark:text-zinc-400">{summaryOf(issue, stage, model)}</span>
-        <span className="mt-2 block text-xs text-zinc-400 dark:text-zinc-500">
+        <span className="mt-1 line-clamp-2 text-sm leading-relaxed text-zinc-500 dark:text-zinc-400">{summaryOf(issue, stage, model)}</span>
+        <span className="mt-2.5 block text-xs text-zinc-400 dark:text-zinc-500">
           {issue.problem !== "error" && `${PROBLEM_LABEL[issue.problem]} · `}
           {harnessLabel(issue.harness)} · {plural(issue.runs, "run")}
           {watching ? ` · fix live ${ago(issue.lesson!.deliveredAt)}` : issue.lastSeen && ` · ${ago(issue.lastSeen)}`}
@@ -432,12 +431,7 @@ function ProblemCard({ issue, model, selected, onSelect }: { issue: Issue; model
   );
 }
 
-const PRIMARY =
-  "inline-flex h-9 items-center justify-center gap-1.5 rounded-lg bg-brand-300 px-4 text-sm font-semibold text-zinc-950 ring-1 ring-black/5 ring-inset transition-colors hover:bg-brand-200 disabled:opacity-50";
-const SECONDARY =
-  "inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:bg-transparent dark:text-zinc-200 dark:hover:bg-white/5";
-const QUIET =
-  "inline-flex h-9 items-center justify-center gap-1.5 rounded-lg px-3 text-sm font-medium text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-50 dark:text-zinc-400 dark:hover:bg-white/5 dark:hover:text-white";
+const { primary: PRIMARY, secondary: SECONDARY, quiet: QUIET } = BUTTON;
 
 type Tab = "diagnosis" | "runs" | "error";
 
@@ -532,21 +526,21 @@ function ProblemPanel({ issue, model, onClose, onIgnored }: { issue: Issue; mode
   ) : null;
 
   return (
-    <div className={cx("flex h-full flex-col bg-white dark:bg-zinc-900", !onClose && "overflow-hidden rounded-xl border border-zinc-200 dark:border-zinc-800")}>
+    <div className={cx("flex h-full flex-col", onClose ? "bg-white dark:bg-zinc-900" : cx(SURFACE, "overflow-hidden"))}>
       {onClose && (
-        <div className="flex h-12 shrink-0 items-center border-b border-zinc-100 px-2 dark:border-zinc-800">
+        <div className="flex h-14 shrink-0 items-center border-b border-zinc-100 px-2 dark:border-white/[0.07]">
           <button type="button" onClick={onClose} className={QUIET}>
             <ArrowLeft className="size-4" />
             Inbox
           </button>
         </div>
       )}
-      <div className="shrink-0 px-5 pt-5">
-        <div className="flex items-start gap-3">
+      <div className="shrink-0 px-6 pt-6">
+        <div className="flex items-start gap-4">
           <ProblemIcon issue={issue} large />
           <div className="min-w-0 flex-1">
-            <h2 className="text-lg leading-snug font-semibold">{(ai ?? issue).title}</h2>
-            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-zinc-500 dark:text-zinc-400">
+            <h2 className="font-display text-xl leading-snug font-bold tracking-tight text-balance">{(ai ?? issue).title}</h2>
+            <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-zinc-500 dark:text-zinc-400">
               <Pill stage={stage} />
               <span>
                 {issue.problem !== "error" && `${PROBLEM_LABEL[issue.problem]} · `}
@@ -556,22 +550,22 @@ function ProblemPanel({ issue, model, onClose, onIgnored }: { issue: Issue; mode
             </div>
           </div>
         </div>
-        <div role="tablist" className="mt-5 flex gap-5 border-b border-zinc-200 text-sm dark:border-zinc-800">
-          <TabButton tab="diagnosis" current={tab} onClick={setTab}>
+        <TabBar className="mt-6">
+          <TabItem current={tab === "diagnosis"} onClick={() => setTab("diagnosis")}>
             Diagnosis
-          </TabButton>
-          <TabButton tab="runs" current={tab} onClick={setTab}>
-            Runs <span className="ml-0.5 rounded-full bg-zinc-100 px-1.5 text-xs tabular-nums text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">{issue.runs}</span>
-          </TabButton>
-          <TabButton tab="error" current={tab} onClick={setTab}>
+          </TabItem>
+          <TabItem current={tab === "runs"} onClick={() => setTab("runs")}>
+            Runs <span className="rounded-full bg-zinc-100 px-1.5 text-xs tabular-nums text-zinc-600 dark:bg-white/10 dark:text-zinc-300">{issue.runs}</span>
+          </TabItem>
+          <TabItem current={tab === "error"} onClick={() => setTab("error")}>
             {issue.problem === "error" ? "Error" : "Evidence"}
-          </TabButton>
-        </div>
+          </TabItem>
+        </TabBar>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-6">
         {tab === "diagnosis" && (
-          <div className="space-y-3">
+          <div className="space-y-6">
             {pending && (
               <div className="flex items-center gap-2.5 rounded-xl bg-zinc-50 px-4 py-3 text-sm text-zinc-600 dark:bg-white/[0.04] dark:text-zinc-300">
                 <Loader2 className="size-4 shrink-0 animate-spin" />
@@ -598,13 +592,15 @@ function ProblemPanel({ issue, model, onClose, onIgnored }: { issue: Issue; mode
               </Block>
             )}
             {ai?.manual && (
-              <section className="rounded-xl bg-amber-50 p-4 dark:bg-amber-500/[0.07]">
-                <h3 className="flex items-center gap-2 text-sm font-semibold text-amber-900 dark:text-amber-200">
-                  <UserRound className="size-4" />
+              <section className="rounded-xl bg-amber-50/70 p-4 ring-1 ring-amber-200/70 ring-inset dark:bg-white/[0.03] dark:ring-white/10">
+                <h3 className="flex items-center gap-2.5 text-sm font-semibold text-amber-900 dark:text-amber-300">
+                  <span className="grid size-6 place-items-center rounded-md bg-amber-100 text-amber-700 dark:bg-amber-400/10 dark:text-amber-300">
+                    <UserRound className="size-3.5" />
+                  </span>
                   Do this yourself
                 </h3>
-                <p className="mt-1.5 text-sm leading-relaxed text-amber-900/90 dark:text-amber-100/80">
-                  {ai.manual} <span className="text-amber-700 dark:text-amber-300/70">Lucid never changes settings or permissions.</span>
+                <p className="mt-2 text-sm leading-relaxed text-amber-950/80 dark:text-zinc-300">
+                  {ai.manual} <span className="text-amber-800/70 dark:text-zinc-500">Lucid never changes settings or permissions.</span>
                 </p>
               </section>
             )}
@@ -615,7 +611,7 @@ function ProblemPanel({ issue, model, onClose, onIgnored }: { issue: Issue; mode
         {tab === "error" && <ErrorTab issue={issue} />}
       </div>
 
-      <div className="shrink-0 border-t border-zinc-200 px-5 py-3 dark:border-zinc-800">
+      <div className="shrink-0 border-t border-zinc-100 bg-zinc-50/60 px-6 py-3.5 dark:border-white/[0.07] dark:bg-white/[0.02]">
         {error && <p className="mb-2 text-xs text-rose-600 dark:text-rose-400">{error.message}</p>}
         <div className="flex items-center gap-2">
           {primary}
@@ -631,34 +627,20 @@ function ProblemPanel({ issue, model, onClose, onIgnored }: { issue: Issue; mode
   );
 }
 
-function TabButton({ tab, current, onClick, children }: { tab: Tab; current: Tab; onClick: (tab: Tab) => void; children: ReactNode }) {
-  return (
-    <button
-      type="button"
-      role="tab"
-      aria-selected={tab === current}
-      onClick={() => onClick(tab)}
-      className={cx(
-        "-mb-px inline-flex items-center border-b-2 pb-2.5 font-medium transition-colors",
-        tab === current ? "border-zinc-900 text-zinc-900 dark:border-zinc-100 dark:text-zinc-100" : "border-transparent text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200",
-      )}
-    >
-      {children}
-    </button>
-  );
-}
-
+/** A part of the diagnosis: a small icon, a heading, and plain text. No box, so the panel isn't boxes in a box. */
 function Block({ icon: Icon, title, aside, children }: { icon: typeof Info; title: string; aside?: ReactNode; children: ReactNode }) {
   return (
-    <section className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
+    <section>
       <div className="flex items-center justify-between gap-2">
-        <h3 className="flex items-center gap-2 text-sm font-semibold">
-          <Icon className="size-4 text-zinc-400" />
+        <h3 className="flex items-center gap-2.5 text-sm font-semibold">
+          <span className="grid size-6 place-items-center rounded-md bg-zinc-100 text-zinc-500 dark:bg-white/[0.07] dark:text-zinc-400">
+            <Icon className="size-3.5" />
+          </span>
           {title}
         </h3>
         {aside}
       </div>
-      <div className="mt-1.5 text-sm leading-relaxed text-zinc-600 dark:text-zinc-300">{children}</div>
+      <div className="mt-2 text-sm leading-relaxed text-zinc-600 sm:pl-[2.125rem] dark:text-zinc-300">{children}</div>
     </section>
   );
 }
@@ -693,16 +675,16 @@ function Change({
 }: { agent: string; text: string; onChange: (text: string) => void; turnedOff: boolean; locked: boolean; children: ReactNode }) {
   const [editing, setEditing] = useState(false);
   return (
-    <div className="mt-3.5">
-      <div className="overflow-hidden rounded-lg border border-zinc-200 dark:border-zinc-700/80">
-        <div className="flex items-center justify-between gap-2 border-b border-zinc-200 bg-zinc-50 py-1 pr-1 pl-3 text-xs text-zinc-500 dark:border-zinc-700/80 dark:bg-white/[0.03] dark:text-zinc-400">
+    <div className="mt-4">
+      <div className="overflow-hidden rounded-xl border border-zinc-200 dark:border-white/10">
+        <div className="flex items-center justify-between gap-2 border-b border-zinc-200 bg-zinc-50 py-1 pr-1 pl-3 text-xs text-zinc-500 dark:border-white/10 dark:bg-white/[0.03] dark:text-zinc-400">
           <span>{turnedOff ? `Was in ${agent}'s instructions (turned off)` : `Adds to ${agent}'s instructions`}</span>
           <button
             type="button"
             onClick={() => setEditing(!editing)}
             // Words under test stay put until the result is in.
             disabled={locked}
-            className="inline-flex items-center gap-1 rounded-md px-2 py-1 font-medium hover:bg-zinc-200/60 hover:text-zinc-900 disabled:opacity-40 dark:hover:bg-white/10 dark:hover:text-white"
+            className="inline-flex items-center gap-1 rounded-md px-2 py-1 font-medium hover:bg-zinc-900/5 hover:text-zinc-900 disabled:opacity-40 dark:hover:bg-white/10 dark:hover:text-white"
           >
             <Pencil className="size-3" />
             {editing ? "Done" : "Edit"}
@@ -726,7 +708,7 @@ function Change({
           )}
         </div>
       </div>
-      <div className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">{children}</div>
+      <div className="mt-2.5 text-xs leading-relaxed text-zinc-500 dark:text-zinc-400">{children}</div>
     </div>
   );
 }
@@ -872,7 +854,7 @@ function DiagnosedBy({ diagnosis: d, onRunAgain, busy }: { diagnosis: Diagnosis 
   );
   if (d.status === "failed") {
     return (
-      <p className="flex flex-wrap items-center gap-x-2 gap-y-1 px-1 text-xs text-zinc-500 dark:text-zinc-400">
+      <p className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-zinc-100 pt-4 text-xs text-zinc-500 dark:border-white/[0.07] dark:text-zinc-400">
         <span className="text-rose-600 dark:text-rose-400" title={d.error}>
           Couldn't diagnose: {d.error.length > 90 ? `${d.error.slice(0, 89)}…` : d.error}
         </span>
@@ -882,7 +864,7 @@ function DiagnosedBy({ diagnosis: d, onRunAgain, busy }: { diagnosis: Diagnosis 
   }
   const cost = costLine(d);
   return (
-    <p className="flex flex-wrap items-center gap-x-2 gap-y-1 px-1 text-xs text-zinc-500 dark:text-zinc-400">
+    <p className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-zinc-100 pt-4 text-xs text-zinc-500 dark:border-white/[0.07] dark:text-zinc-400">
       <span className="inline-flex items-center gap-1.5">
         {isMuse(d.model) && <BrandMark brand={BRANDS.meta} className="size-3.5" />}
         Diagnosed by {modelLabel(d.model)} {ago(d.at)}
@@ -901,16 +883,16 @@ function DiagnosedBy({ diagnosis: d, onRunAgain, busy }: { diagnosis: Diagnosis 
 /** The runs it hit, newest first, to open and read. */
 function RunsTab({ issue }: { issue: Issue }) {
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
       <p className="text-sm text-zinc-600 dark:text-zinc-300">
         Failed {plural(issue.occurrences, "time")} in {plural(issue.runs, "run")}
         {issue.firstSeen && `, first ${ago(issue.firstSeen)}`}
         {issue.lastSeen && `, last ${ago(issue.lastSeen)}`}.
       </p>
-      <ul className="divide-y divide-zinc-100 overflow-hidden rounded-xl border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
+      <ul className="divide-y divide-zinc-100 overflow-hidden rounded-xl border border-zinc-200 dark:divide-white/[0.07] dark:border-white/10">
         {issue.examples.map((example) => (
           <li key={example.runId}>
-            <Link to={`/runs/${example.runId}`} className="flex items-center gap-3 px-4 py-3 text-sm hover:bg-zinc-50 dark:hover:bg-white/[0.03]">
+            <Link to={`/runs/${example.runId}`} className="flex items-center gap-3 px-4 py-3 text-sm transition-colors hover:bg-zinc-50 dark:hover:bg-white/[0.03]">
               <span className="size-2 shrink-0 rounded-full bg-rose-500" aria-hidden />
               <span className="min-w-0 flex-1 truncate">{example.runName ?? "Run"}</span>
               <ChevronRight className="size-4 shrink-0 text-zinc-400" />
@@ -927,9 +909,9 @@ function RunsTab({ issue }: { issue: Issue }) {
 function ErrorTab({ issue }: { issue: Issue }) {
   if (issue.problem !== "error") {
     return (
-      <div className="space-y-3">
+      <div className="space-y-4">
         <p className="text-sm text-zinc-600 dark:text-zinc-300">What Lucid saw in the newest run:</p>
-        <div className="rounded-xl border border-zinc-200 p-4 text-sm leading-relaxed whitespace-pre-wrap text-zinc-700 [overflow-wrap:anywhere] dark:border-zinc-800 dark:text-zinc-300">
+        <div className="rounded-xl border border-zinc-200 p-4 text-sm leading-relaxed whitespace-pre-wrap text-zinc-700 [overflow-wrap:anywhere] dark:border-white/10 dark:text-zinc-300">
           {issue.sample}
         </div>
         <p className="text-xs text-zinc-500 dark:text-zinc-400">{FOUND_HOW[issue.problem]}</p>
@@ -937,7 +919,7 @@ function ErrorTab({ issue }: { issue: Issue }) {
     );
   }
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
       <p className="text-sm text-zinc-600 dark:text-zinc-300">
         {issue.toolName ? (
           <>
@@ -948,8 +930,8 @@ function ErrorTab({ issue }: { issue: Issue }) {
         )}
       </p>
       {issue.sample ? (
-        <div className="overflow-hidden rounded-xl border border-zinc-200 dark:border-zinc-800">
-          <div className="flex justify-end border-b border-zinc-200 bg-zinc-50 px-1 py-0.5 dark:border-zinc-800 dark:bg-white/[0.03]">
+        <div className="overflow-hidden rounded-xl border border-zinc-200 dark:border-white/10">
+          <div className="flex justify-end border-b border-zinc-200 bg-zinc-50 px-1 py-0.5 dark:border-white/10 dark:bg-white/[0.03]">
             <CopyButton text={issue.sample} />
           </div>
           <pre className="max-h-96 overflow-auto p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap text-zinc-700 [overflow-wrap:anywhere] dark:text-zinc-300">{issue.sample}</pre>

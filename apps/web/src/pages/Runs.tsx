@@ -5,7 +5,7 @@ import { type RunListItem, api } from "../api";
 import { ago, cost, duration, harnessLabel, plural } from "../format";
 import { SyncBanner } from "../syncs";
 import { InOut } from "../tokens";
-import { Card, Empty, RunDot, Stat, cx } from "../ui";
+import { Card, Empty, PageHeader, RunDot, Segmented, StatTile, TabBar, TabItem, cx } from "../ui";
 import { Spend } from "./Spend";
 
 const STATUS_FILTERS = [
@@ -28,52 +28,37 @@ export function Runs() {
   };
 
   return (
-    <div className="space-y-5">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-semibold">Runs</h1>
-          <p className="text-sm text-zinc-500 dark:text-zinc-400">
-            {spend ? "What your agents' model calls cost, and where the tokens go." : "Every request your agents handled, newest first."}
-          </p>
+    <div className="space-y-8">
+      <PageHeader title="Runs" sub={spend ? "What your agents' model calls cost, and where the tokens go." : "Every request your agents handled, newest first."} />
+
+      {!spend && (
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <StatTile label="Runs today" value={day?.runs ?? "—"} sub="Started in the last 24 hours" hint="Runs that started in the last 24 hours" />
+          <StatTile
+            label="With errors"
+            value={day?.errors ?? "—"}
+            sub="Failed, or had a failed step"
+            hint="Runs in the last 24 hours that failed or had a failed step"
+            tone={day?.errors ? "bad" : undefined}
+          />
+          <StatTile label="Spend today" value={cost(day?.costUsd)} sub="Model cost, last 24 hours" hint="Model cost of the last 24 hours. Claude Code's reported cost when available, otherwise list prices × tokens" />
+          <StatTile label="Avg duration" value={duration(day?.avgDurationMs)} sub="Request to last step" hint="Average time from the request to the agent's last step" />
         </div>
-        {!spend && (
-          <Card className="grid grid-cols-2 gap-x-8 gap-y-3 px-5 py-3 sm:grid-cols-4">
-            <Stat label="Runs today" value={day?.runs ?? "—"} hint="Runs that started in the last 24 hours" />
-            <Stat label="With errors" value={day?.errors ?? "—"} hint="Runs in the last 24 hours that failed or had a failed step" tone={day?.errors ? "bad" : undefined} />
-            <Stat label="Spend today" value={cost(day?.costUsd)} hint="Model cost of the last 24 hours. Claude Code's reported cost when available, otherwise list prices × tokens" />
-            <Stat label="Avg duration" value={duration(day?.avgDurationMs)} hint="Average time from the request to the agent's last step" />
-          </Card>
-        )}
-      </div>
-
-      <div role="tablist" className="flex gap-5 border-b border-zinc-200 text-sm dark:border-zinc-800">
-        <ViewTab current={!spend} onClick={() => showSpend(false)}>
-          All runs
-        </ViewTab>
-        <ViewTab current={spend} onClick={() => showSpend(true)}>
-          Spend and tokens
-        </ViewTab>
-      </div>
-
-      {spend ? <Spend /> : <RunList />}
-    </div>
-  );
-}
-
-function ViewTab({ current, onClick, children }: { current: boolean; onClick: () => void; children: string }) {
-  return (
-    <button
-      type="button"
-      role="tab"
-      aria-selected={current}
-      onClick={onClick}
-      className={cx(
-        "-mb-px border-b-2 pb-2.5 font-medium transition-colors",
-        current ? "border-zinc-900 text-zinc-900 dark:border-zinc-100 dark:text-zinc-100" : "border-transparent text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200",
       )}
-    >
-      {children}
-    </button>
+
+      <div className="space-y-6">
+        <TabBar>
+          <TabItem current={!spend} onClick={() => showSpend(false)}>
+            All runs
+          </TabItem>
+          <TabItem current={spend} onClick={() => showSpend(true)}>
+            Spend and tokens
+          </TabItem>
+        </TabBar>
+
+        {spend ? <Spend /> : <RunList />}
+      </div>
+    </div>
   );
 }
 
@@ -108,36 +93,22 @@ function RunList() {
     <div className="space-y-5">
       <SyncBanner />
 
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-3">
         <label className="relative min-w-60 flex-1">
-          <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-zinc-400" />
+          <Search className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-zinc-400" />
           <input
             value={q}
             onChange={(event) => setParam("q", event.target.value)}
             placeholder="Search requests and answers…"
-            className="w-full rounded-lg border border-zinc-200 bg-white py-2 pr-3 pl-9 text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-400/30 dark:border-zinc-800 dark:bg-zinc-900"
+            className="h-10 w-full rounded-xl border border-zinc-200 bg-white pr-3 pl-10 text-sm shadow-[0_1px_2px_rgba(24,24,27,0.04)] outline-none placeholder:text-zinc-400 focus:border-zinc-400 focus:ring-4 focus:ring-zinc-900/5 dark:border-white/10 dark:bg-zinc-900 dark:focus:border-white/25 dark:focus:ring-white/5"
           />
         </label>
-        <div className="flex rounded-lg border border-zinc-200 bg-white p-0.5 dark:border-zinc-800 dark:bg-zinc-900">
-          {STATUS_FILTERS.map((filter) => (
-            <button
-              key={filter.value}
-              type="button"
-              onClick={() => setParam("status", filter.value)}
-              className={cx(
-                "rounded-md px-3 py-1.5 text-sm",
-                status === filter.value ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900" : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100",
-              )}
-            >
-              {filter.label}
-            </button>
-          ))}
-        </div>
+        <Segmented label="Status" options={STATUS_FILTERS} value={status} onChange={(value) => setParam("status", value)} />
         {(overview.data?.harnesses.length ?? 0) > 1 && (
           <select
             value={harness}
             onChange={(event) => setParam("harness", event.target.value)}
-            className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-800 dark:bg-zinc-900"
+            className="h-10 rounded-xl border border-zinc-200 bg-white px-3 text-sm shadow-[0_1px_2px_rgba(24,24,27,0.04)] dark:border-white/10 dark:bg-zinc-900"
           >
             <option value="">All agents</option>
             {overview.data?.harnesses.map((h) => (
@@ -158,19 +129,27 @@ function RunList() {
               "Try clearing the search or filters."
             ) : (
               <>
-                Connect an agent and its runs show up here live. <Link to="/connect" className="text-brand-700 underline">Connect one</Link>.
+                Connect an agent and its runs show up here live.{" "}
+                <Link to="/connect" className="font-medium text-zinc-900 underline underline-offset-2 dark:text-white">
+                  Connect one
+                </Link>
+                .
               </>
             )}
           </Empty>
         ) : (
-          <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
+          <ul className="divide-y divide-zinc-100 dark:divide-white/[0.06]">
             {rows.map((run) => (
               <RunRow key={run.id} run={run} />
             ))}
           </ul>
         )}
         {runs.hasNextPage && (
-          <button type="button" onClick={() => void runs.fetchNextPage()} className="w-full border-t border-zinc-100 py-3 text-sm text-zinc-600 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-800/50">
+          <button
+            type="button"
+            onClick={() => void runs.fetchNextPage()}
+            className="w-full border-t border-zinc-100 py-3.5 text-sm font-medium text-zinc-600 transition-colors hover:bg-zinc-50 dark:border-white/[0.06] dark:text-zinc-300 dark:hover:bg-white/[0.03]"
+          >
             {runs.isFetchingNextPage ? "Loading…" : "Show older runs"}
           </button>
         )}
@@ -189,11 +168,11 @@ function RunRow({ run }: { run: RunListItem }) {
   ].filter(Boolean);
   return (
     <li>
-      <Link to={`/runs/${run.id}`} className="flex items-start gap-3 px-4 py-3 hover:bg-zinc-50 dark:hover:bg-zinc-800/40">
+      <Link to={`/runs/${run.id}`} className="flex items-start gap-3.5 px-5 py-3.5 transition-colors hover:bg-zinc-50/80 dark:hover:bg-white/[0.03]">
         <RunDot status={run.status} errorCount={run.errorCount} className="mt-1.5" />
         <div className="min-w-0 flex-1">
           <div className={cx("truncate text-sm font-medium", run.metadata?.systemTurn && "text-zinc-500 italic")}>{run.name ?? run.input ?? "Untitled run"}</div>
-          <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-zinc-500 dark:text-zinc-400">
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 text-xs text-zinc-500 dark:text-zinc-400">
             {facts.map((fact, i) => (
               <span key={i}>{fact}</span>
             ))}

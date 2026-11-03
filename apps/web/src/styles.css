@@ -2,15 +2,8 @@
 @layer theme, base, clerk, components, utilities;
 @import "tailwindcss";
 
-/* Dark follows the system, or is forced for a subtree with class="dark" (the sign-in screens). */
-@custom-variant dark {
-  @media (prefers-color-scheme: dark) {
-    @slot;
-  }
-  &:where(.dark, .dark *) {
-    @slot;
-  }
-}
+/* Light by default. Dark when <html> has class="dark" (picked in the header, see theme.ts), or for a subtree (the sign-in screens). */
+@custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
   --font-sans: "Geist Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -29,6 +22,9 @@
   --color-brand-800: #4e610e;
   --color-brand-900: #415211;
   --color-brand-950: #222e03;
+
+  /* The page behind the cards: a warm white, so white cards stand off it. */
+  --color-paper: #f7f7f5;
 }
 
 /*
@@ -46,14 +42,6 @@
   --series-2: #eb6834;
   --series-3: #1baf7a;
   --series-4: #eda100;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --series-1: #3987e5;
-    --series-2: #d95926;
-    --series-3: #199e70;
-    --series-4: #c98500;
-  }
 }
 .dark {
   --series-1: #3987e5;
@@ -89,9 +77,15 @@
   }
 }
 
+html {
+  color-scheme: light;
+}
+html.dark {
+  color-scheme: dark;
+}
 html,
 body {
-  @apply bg-zinc-50 text-zinc-900 antialiased dark:bg-zinc-950 dark:text-zinc-100;
+  @apply bg-paper text-zinc-900 antialiased dark:bg-zinc-950 dark:text-zinc-100;
 }
 
 /* Agent answers and reasoning are markdown. */

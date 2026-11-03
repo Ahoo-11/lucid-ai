@@ -1,12 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, FlaskConical } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, FlaskConical } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router";
 import { type RunDetail, type Step, api } from "../api";
 import { cost, dateTime, duration, harnessLabel, mcpParts, plural, tokens, toolLabel } from "../format";
 import { type Node, type Row, type Turn, argSummary, buildTree, contextTokens, story, toRows, toTurns } from "../story";
 import { InOut, TokenBreakdown } from "../tokens";
-import { Card, Chip, KindIcon, Prose, Section, Stat, StatusDot, StatusPill, cx, kindLabel } from "../ui";
+import { BackLink, Card, Chip, KindIcon, LABEL, Prose, Section, Stat, StatusDot, StatusPill, cx, kindLabel } from "../ui";
 
 export function RunPage() {
   const { id = "" } = useParams();
@@ -37,10 +37,10 @@ export function RunPage() {
   const context = Math.max(0, ...data.steps.filter((s) => s.kind === "llm").map(contextTokens));
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
       <RunHeader data={data} />
 
-      <Card className="grid grid-cols-2 gap-4 px-5 py-4 sm:grid-cols-3 lg:grid-cols-6">
+      <Card className="grid grid-cols-2 gap-x-6 gap-y-5 px-6 py-5 sm:grid-cols-3 lg:grid-cols-6">
         <Stat label="Duration" value={duration(run.durationMs)} hint="From the request to the agent's last step" />
         <Stat
           label="Cost"
@@ -58,9 +58,9 @@ export function RunPage() {
       </Card>
 
       {run.llmCallCount > 0 && (
-        <Card className="px-5 py-4">
-          <div className="mb-3 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-            <h2 className="text-sm font-semibold">Tokens and cost</h2>
+        <Card className="px-6 py-5">
+          <div className="mb-4 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+            <h2 className="text-[15px] font-semibold">Tokens and cost</h2>
             <span className="text-xs text-zinc-500 dark:text-zinc-400">
               <InOut t={run} /> across {plural(run.llmCallCount, "model call")}
               {data.costSplit && " · cost by kind is estimated from list prices"}
@@ -70,23 +70,23 @@ export function RunPage() {
         </Card>
       )}
 
-      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,440px)]">
-        <div className="min-w-0 space-y-5">
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,440px)]">
+        <div className="min-w-0 space-y-6">
           <RequestAndAnswer data={data} />
-          <Card className="p-4">
+          <Card className="p-5">
             <Section title="What happened" hint="Each model decision and the actions it led to. Press j / k to step through.">
               <Timeline nodes={tree} selected={selected} onSelect={setSelected} />
             </Section>
           </Card>
         </div>
         <div className="min-w-0">
-          <div className="lg:sticky lg:top-20 lg:max-h-[calc(100dvh-6rem)] lg:overflow-y-auto">
+          <div className="lg:sticky lg:top-24 lg:max-h-[calc(100dvh-7.5rem)] lg:overflow-y-auto">
             {step ? (
               <StepDetail step={step} steps={data.steps} onClose={() => setSelected(null)} />
             ) : (
-              <Card className="p-5 text-sm text-zinc-500 dark:text-zinc-400">
-                <div className="font-medium text-zinc-900 dark:text-zinc-100">Pick a step</div>
-                <p className="mt-1">
+              <Card className="p-6 text-sm leading-relaxed text-zinc-500 dark:text-zinc-400">
+                <div className="font-display text-lg font-bold tracking-tight text-zinc-900 dark:text-zinc-100">Pick a step</div>
+                <p className="mt-1.5">
                   Click any decision to see what the agent knew, which tools it could have used, what it chose and why. Click an action to see its input and result.
                 </p>
               </Card>
@@ -105,11 +105,9 @@ function RunHeader({ data }: { data: RunDetail }) {
   const next = index >= 0 && index < sessionRuns.length - 1 ? sessionRuns[index + 1] : undefined;
   const parts = story(buildTree(data.steps), run.status);
   return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between gap-2 text-sm text-zinc-500">
-        <Link to="/runs" className="inline-flex items-center gap-1 hover:text-zinc-900 dark:hover:text-zinc-100">
-          <ArrowLeft className="size-4" /> Runs
-        </Link>
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-2 text-sm text-zinc-500 dark:text-zinc-400">
+        <BackLink to="/runs">Runs</BackLink>
         {sessionRuns.length > 1 && (
           <div className="flex items-center gap-1">
             <span className="mr-1 hidden sm:inline">
@@ -125,11 +123,13 @@ function RunHeader({ data }: { data: RunDetail }) {
         )}
       </div>
       <div>
-        <div className="flex flex-wrap items-center gap-2">
-          <h1 className={cx("text-xl font-semibold", run.metadata?.systemTurn && "text-zinc-500 italic")}>{run.name ?? "Untitled run"}</h1>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <h1 className={cx("line-clamp-2 font-display text-xl leading-snug font-bold tracking-tight text-balance sm:text-2xl", run.metadata?.systemTurn && "text-zinc-500 italic")} title={run.name ?? undefined}>
+            {run.name ?? "Untitled run"}
+          </h1>
           <StatusPill status={run.status} errorCount={run.errorCount} />
         </div>
-        <div className="mt-1 flex flex-wrap gap-x-3 text-sm text-zinc-500 dark:text-zinc-400">
+        <div className="mt-1.5 flex flex-wrap gap-x-3 text-sm text-zinc-500 dark:text-zinc-400">
           <span>{harnessLabel(run.harness)}</span>
           {run.model && <span>{run.model}</span>}
           <span>{dateTime(run.startedAt)}</span>
@@ -152,7 +152,7 @@ function RunHeader({ data }: { data: RunDetail }) {
                       : "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400"
                   : part.kind === "agent"
                     ? "bg-teal-50 text-teal-700 dark:bg-teal-500/10 dark:text-teal-300"
-                    : "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300",
+                    : "bg-white text-zinc-700 ring-1 ring-zinc-200 dark:bg-white/[0.06] dark:text-zinc-300 dark:ring-white/10",
               )}
             >
               {part.label}
@@ -169,7 +169,7 @@ function RunHeader({ data }: { data: RunDetail }) {
 function NavButton({ to, label, children }: { to?: string; label: string; children: ReactNode }) {
   if (!to) return <span className="rounded-md p-1 opacity-30">{children}</span>;
   return (
-    <Link to={to} title={label} className="rounded-md p-1 hover:bg-zinc-100 dark:hover:bg-zinc-800">
+    <Link to={to} title={label} className="rounded-lg p-1.5 transition-colors hover:bg-zinc-900/5 hover:text-zinc-900 dark:hover:bg-white/10 dark:hover:text-white">
       {children}
     </Link>
   );
@@ -184,7 +184,7 @@ function Expandable({ text, lines = 6 }: { text: string; lines?: number }) {
         <Prose text={text} />
       </div>
       {long && (
-        <button type="button" onClick={() => setOpen(!open)} className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-brand-700 dark:text-brand-300">
+        <button type="button" onClick={() => setOpen(!open)} className="mt-1.5 inline-flex items-center gap-1 text-xs font-medium text-zinc-600 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-white">
           {open ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
           {open ? "Show less" : "Show all"}
         </button>
@@ -196,13 +196,13 @@ function Expandable({ text, lines = 6 }: { text: string; lines?: number }) {
 function RequestAndAnswer({ data }: { data: RunDetail }) {
   const { run } = data;
   return (
-    <Card className="divide-y divide-zinc-100 dark:divide-zinc-800">
-      <div className="p-4">
+    <Card className="divide-y divide-zinc-100 dark:divide-white/[0.06]">
+      <div className="p-5">
         <Section title="Request" hint="What the agent was asked, verbatim">
           {run.input ? <Expandable text={run.input} /> : <p className="text-sm text-zinc-500">The request wasn't captured.</p>}
         </Section>
       </div>
-      <div className="p-4">
+      <div className="p-5">
         <Section title="Answer" hint="The agent's final reply">
           {run.output ? (
             <Expandable text={run.output} />
@@ -246,7 +246,7 @@ function StepButton({ step, selected, onSelect, children, meta }: { step: Step; 
       onClick={() => onSelect(step.externalId)}
       className={cx(
         "flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-sm transition-colors",
-        selected ? "bg-brand-50 ring-1 ring-brand-400 dark:bg-brand-400/10 dark:ring-brand-400/40" : "hover:bg-zinc-50 dark:hover:bg-zinc-800/50",
+        selected ? "bg-zinc-100 ring-1 ring-zinc-900/70 dark:bg-white/[0.07] dark:ring-white/40" : "hover:bg-zinc-50 dark:hover:bg-white/[0.04]",
       )}
     >
       <KindIcon kind={step.kind} failed={step.status === "error"} size="sm" />
@@ -279,7 +279,7 @@ function TurnRows({ turn, selected, onSelect, depth }: { turn: Turn; selected: s
         </StepButton>
       )}
       {turn.actions.length > 0 && (
-        <ol className={cx("space-y-0.5", turn.llm && "ml-4 border-l border-zinc-200 pl-2 dark:border-zinc-800")}>
+        <ol className={cx("space-y-0.5", turn.llm && "ml-4 border-l border-zinc-200 pl-2 dark:border-white/10")}>
           {turn.actions.map((action) => (
             <ActionRow key={action.step.externalId} node={action} selected={selected} onSelect={onSelect} depth={depth} />
           ))}
@@ -323,7 +323,7 @@ function ActionRow({ node, selected, onSelect, depth }: { node: Node; selected: 
         </div>
       </div>
       {open && node.children.length > 0 && (
-        <div className="mt-1 mb-2 ml-5 rounded-lg border border-teal-200 bg-teal-50/40 p-2 dark:border-teal-500/20 dark:bg-teal-500/5">
+        <div className="mt-1 mb-2 ml-5 rounded-xl border border-teal-200/80 bg-teal-50/40 p-2 dark:border-teal-500/20 dark:bg-teal-500/5">
           <Timeline nodes={node.children} selected={selected} onSelect={onSelect} depth={depth + 1} />
         </div>
       )}
@@ -355,7 +355,7 @@ function RepeatRow({ row, selected, onSelect, depth }: { row: Extract<Row, { typ
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800/50"
+        className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-sm hover:bg-zinc-50 dark:hover:bg-white/[0.04]"
         title="Consecutive decisions that each used this tool once and succeeded"
       >
         <KindIcon kind="tool" size="sm" />
@@ -387,13 +387,13 @@ const pretty = (value: unknown) => (typeof value === "string" ? value : JSON.str
 
 function StepDetail({ step, steps, onClose }: { step: Step; steps: Step[]; onClose: () => void }) {
   return (
-    <Card className="divide-y divide-zinc-100 dark:divide-zinc-800">
-      <div className="flex items-start gap-3 p-4">
+    <Card className="divide-y divide-zinc-100 dark:divide-white/[0.06]">
+      <div className="flex items-start gap-3.5 p-5">
         <KindIcon kind={step.kind} failed={step.status === "error"} />
         <div className="min-w-0 flex-1">
-          <div className="text-xs text-zinc-500">{kindLabel(step.kind)}</div>
-          <div className="truncate font-semibold">{step.kind === "llm" ? (step.model ?? step.name) : step.name}</div>
-          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500">
+          <div className={LABEL}>{kindLabel(step.kind)}</div>
+          <div className="mt-0.5 truncate font-semibold">{step.kind === "llm" ? (step.model ?? step.name) : step.name}</div>
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500 dark:text-zinc-400">
             <span className="inline-flex items-center gap-1">
               <StatusDot status={step.status} />
               {step.status === "ok" ? "Succeeded" : step.status === "error" ? "Failed" : "Running"}
@@ -402,13 +402,13 @@ function StepDetail({ step, steps, onClose }: { step: Step; steps: Step[]; onClo
             <span>{dateTime(step.startedAt)}</span>
           </div>
         </div>
-        <button type="button" onClick={onClose} className="rounded-md px-2 py-1 text-xs text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800">
+        <button type="button" onClick={onClose} className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-zinc-500 transition-colors hover:bg-zinc-900/5 hover:text-zinc-900 dark:hover:bg-white/10 dark:hover:text-white">
           Close
         </button>
       </div>
       {step.error && (
-        <div className="bg-rose-50 p-4 dark:bg-rose-500/10">
-          <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-rose-700 dark:text-rose-400">Error</div>
+        <div className="bg-rose-50/70 p-5 dark:bg-rose-500/[0.07]">
+          <div className={cx(LABEL, "mb-1.5 text-rose-700 dark:text-rose-400")}>Error</div>
           <pre className="font-mono text-xs whitespace-pre-wrap text-rose-800 dark:text-rose-300">{step.error}</pre>
         </div>
       )}
@@ -441,7 +441,7 @@ function DecisionDetail({ step, steps }: { step: Step; steps: Step[] }) {
 
   return (
     <>
-      <div className="space-y-2 p-4">
+      <div className="p-5">
         <Section
           title="What it could choose from"
           hint="The tools the model was offered on this call. Highlighted: the ones it picked."
@@ -454,14 +454,14 @@ function DecisionDetail({ step, steps }: { step: Step; steps: Step[] }) {
           )}
         </Section>
       </div>
-      <div className="space-y-2 p-4">
+      <div className="p-5">
         <Section title="What it chose" hint="The model's decision on this call">
           {calls.length ? (
             <div className="space-y-2">
               {calls.map((call, i) => (
                 <div key={call.id ?? i}>
                   <div className="mb-1 font-mono text-xs font-semibold">{call.name}</div>
-                  <pre className="max-h-48 overflow-auto rounded-lg bg-zinc-50 p-2 font-mono text-[11px] dark:bg-zinc-950">{pretty(call.input ?? call.arguments ?? {})}</pre>
+                  <pre className="max-h-48 overflow-auto rounded-xl bg-zinc-50 p-3 font-mono text-[11px] ring-1 ring-zinc-200/70 ring-inset dark:bg-zinc-950 dark:ring-white/10">{pretty(call.input ?? call.arguments ?? {})}</pre>
                 </div>
               ))}
             </div>
@@ -476,7 +476,7 @@ function DecisionDetail({ step, steps }: { step: Step; steps: Step[] }) {
           )}
         </Section>
       </div>
-      <div className="space-y-2 p-4">
+      <div className="p-5">
         <Section title="Why" hint="Reasoning the model showed before acting: its thinking, or what it said before calling tools">
           {reasoning ? (
             <Expandable text={reasoning} lines={8} />
@@ -486,13 +486,13 @@ function DecisionDetail({ step, steps }: { step: Step; steps: Step[] }) {
         </Section>
       </div>
       {answer && (
-        <div className="space-y-2 p-4">
+        <div className="p-5">
           <Section title={calls.length ? "Said" : "Answer"}>
             <Expandable text={answer} lines={8} />
           </Section>
         </div>
       )}
-      <div className="space-y-3 p-4">
+      <div className="space-y-3 p-5">
         <Section title="What it knew" hint="Tokens the model read on this call: new input plus input served from the prompt cache">
           <div className="grid grid-cols-3 gap-3 text-sm">
             <Mini label="Tokens in" value={tokens(contextTokens(step))} />
@@ -512,7 +512,7 @@ function DecisionDetail({ step, steps }: { step: Step; steps: Step[] }) {
         </Section>
         {Array.isArray(messages) && messages.length > 0 && <Messages messages={messages as { role: string; content: unknown }[]} />}
       </div>
-      <div className="p-4">
+      <div className="p-5">
         <TryInArena step={step} />
       </div>
     </>
@@ -553,7 +553,7 @@ function ToolChoices({ available, chosen }: { available: string[]; chosen: Set<s
         ))}
       </div>
       {open && (
-        <div className="flex flex-wrap gap-1 rounded-lg bg-zinc-50 p-2 dark:bg-zinc-950">
+        <div className="flex flex-wrap gap-1 rounded-xl bg-zinc-50 p-2 dark:bg-zinc-950">
           {servers.get(open)?.map((tool) => (
             <Chip key={tool}>{tool}</Chip>
           ))}
@@ -572,9 +572,9 @@ const costTitle = (step: Step) =>
 
 function Mini({ label, value }: { label: string; value: ReactNode }) {
   return (
-    <div className="rounded-lg bg-zinc-50 px-3 py-2 dark:bg-zinc-950">
-      <div className="text-[11px] text-zinc-500">{label}</div>
-      <div className="font-semibold tabular-nums">{value}</div>
+    <div className="rounded-xl bg-zinc-50 px-3 py-2.5 ring-1 ring-zinc-200/70 ring-inset dark:bg-zinc-950 dark:ring-white/10">
+      <div className="text-[11px] text-zinc-500 dark:text-zinc-400">{label}</div>
+      <div className="mt-0.5 font-semibold tabular-nums">{value}</div>
     </div>
   );
 }
@@ -583,15 +583,15 @@ function Messages({ messages }: { messages: { role: string; content: unknown }[]
   const [open, setOpen] = useState(false);
   return (
     <div>
-      <button type="button" onClick={() => setOpen(!open)} className="inline-flex items-center gap-1 text-xs font-medium text-brand-700 dark:text-brand-300">
+      <button type="button" onClick={() => setOpen(!open)} className="inline-flex items-center gap-1 text-xs font-medium text-zinc-600 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-white">
         {open ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
         {open ? "Hide" : "Show"} the {plural(messages.length, "message")} sent to the model
       </button>
       {open && (
         <div className="mt-2 space-y-2">
           {messages.map((message, i) => (
-            <div key={i} className="rounded-lg border border-zinc-200 p-2 dark:border-zinc-800">
-              <div className="mb-1 text-[11px] font-semibold uppercase text-zinc-500">{message.role}</div>
+            <div key={i} className="rounded-xl border border-zinc-200 p-3 dark:border-white/10">
+              <div className={cx(LABEL, "mb-1.5")}>{message.role}</div>
               <pre className="max-h-60 overflow-auto font-mono text-[11px] whitespace-pre-wrap">{pretty(message.content)}</pre>
             </div>
           ))}
@@ -609,20 +609,20 @@ function ActionDetail({ step }: { step: Step }) {
   const decision = step.attrs?.permissionDecision;
   return (
     <>
-      <div className="space-y-2 p-4">
+      <div className="p-5">
         <Section title="Input" hint="What the agent passed to this tool">
           {input.isPending && step.inputHash ? (
             <p className="text-sm text-zinc-500">Loading…</p>
           ) : command ? (
-            <pre className="overflow-x-auto rounded-lg bg-zinc-900 p-3 font-mono text-xs text-zinc-100">$ {command}</pre>
+            <pre className="overflow-x-auto rounded-xl bg-zinc-950 p-3.5 font-mono text-xs text-zinc-100 ring-1 ring-zinc-900 dark:ring-white/10">$ {command}</pre>
           ) : args !== undefined ? (
-            <pre className="max-h-64 overflow-auto rounded-lg bg-zinc-50 p-3 font-mono text-[11px] dark:bg-zinc-950">{pretty(args)}</pre>
+            <pre className="max-h-64 overflow-auto rounded-xl bg-zinc-50 p-3 font-mono text-[11px] ring-1 ring-zinc-200/70 ring-inset dark:bg-zinc-950 dark:ring-white/10">{pretty(args)}</pre>
           ) : (
             <p className="text-sm text-zinc-500">No input captured.</p>
           )}
         </Section>
       </div>
-      <div className="space-y-2 p-4">
+      <div className="p-5">
         <Section title={step.kind === "agent" ? "Result" : "Output"} hint="What came back, as the agent saw it">
           {output.isPending && step.outputHash ? (
             <p className="text-sm text-zinc-500">Loading…</p>
@@ -630,7 +630,7 @@ function ActionDetail({ step }: { step: Step }) {
             step.kind === "agent" ? (
               <Expandable text={String(parse(output.data))} lines={10} />
             ) : (
-              <pre className="max-h-96 overflow-auto rounded-lg bg-zinc-50 p-3 font-mono text-[11px] whitespace-pre-wrap dark:bg-zinc-950">{pretty(parse(output.data))}</pre>
+              <pre className="max-h-96 overflow-auto rounded-xl bg-zinc-50 p-3 font-mono text-[11px] whitespace-pre-wrap ring-1 ring-zinc-200/70 ring-inset dark:bg-zinc-950 dark:ring-white/10">{pretty(parse(output.data))}</pre>
             )
           ) : (
             <p className="text-sm text-zinc-500">{step.status === "running" ? "Still running…" : "No output captured."}</p>
@@ -638,7 +638,7 @@ function ActionDetail({ step }: { step: Step }) {
         </Section>
       </div>
       {decision && (
-        <div className="p-4 text-xs text-zinc-500">
+        <div className="p-5 text-xs text-zinc-500">
           Permission: <span className="font-medium text-zinc-700 dark:text-zinc-300">{decision === "accept" ? "allowed" : decision}</span>
         </div>
       )}
@@ -650,7 +650,9 @@ function TryInArena({ step }: { step: Step }) {
   const check = useQuery({ queryKey: ["arena", "check", step.id], queryFn: () => api.arena.check(step.id), staleTime: 60_000 });
   const body = (
     <>
-      <FlaskConical className="size-4 shrink-0 text-brand-700 dark:text-brand-300" />
+      <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-brand-300 text-zinc-950">
+        <FlaskConical className="size-4" />
+      </span>
       <span>
         <span className="font-medium">Try this decision with another model or prompt</span>
         <span className="block text-xs text-zinc-500">
@@ -660,12 +662,12 @@ function TryInArena({ step }: { step: Step }) {
     </>
   );
   if (!check.data?.ok) {
-    return <div className="flex items-center gap-3 rounded-lg border border-dashed border-zinc-300 p-3 text-sm opacity-70 dark:border-zinc-700">{body}</div>;
+    return <div className="flex items-center gap-3 rounded-xl border border-dashed border-zinc-300 p-3.5 text-sm opacity-60 grayscale dark:border-white/15">{body}</div>;
   }
   return (
     <Link
       to={`/arena/new?step=${step.id}&run=${step.runId}`}
-      className="flex items-center gap-3 rounded-lg border border-dashed border-brand-400 p-3 text-sm hover:bg-brand-50 dark:border-brand-400/40 dark:hover:bg-brand-400/10"
+      className="flex items-center gap-3 rounded-xl border border-zinc-200 p-3.5 text-sm transition-colors hover:border-zinc-300 hover:bg-zinc-50 dark:border-white/10 dark:hover:bg-white/[0.04]"
     >
       {body}
     </Link>

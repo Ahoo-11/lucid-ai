@@ -3,8 +3,16 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="color-scheme" content="light dark" />
-    <meta name="theme-color" content="#09090b" />
+    <meta name="theme-color" content="#f7f7f5" />
+    <!-- Light unless this browser picked dark (see src/theme.ts). -->
+    <script>
+      try {
+        if (localStorage.getItem("lucid.theme") === "dark") {
+          document.documentElement.classList.add("dark");
+          document.querySelector('meta[name="theme-color"]').setAttribute("content", "#09090b");
+        }
+      } catch {}
+    </script>
     <title>Lucid · Make your AI agents smarter every run</title>
     <meta name="description" content="Open-source observability for AI agents. See every prompt, tool call and decision, get failures grouped with a fix, and prove a better model or prompt on your own runs, blind." />
     <!-- The server writes its public address in front of /og.png when it serves this page. -->

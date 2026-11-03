@@ -136,7 +136,7 @@ export function PasswordSignIn({ signups }: { signups: boolean }) {
           <button
             type="submit"
             disabled={submit.isPending}
-            className="group mt-2 inline-flex h-11 w-full items-center justify-center gap-2 rounded-full bg-brand-300 text-sm font-semibold text-zinc-950 shadow-[0_10px_40px_-12px_rgba(216,248,74,0.6)] transition hover:bg-brand-200 disabled:opacity-60"
+            className="group mt-2 inline-flex h-11 w-full items-center justify-center gap-2 rounded-full bg-brand-300 text-sm font-semibold text-zinc-950 transition hover:bg-brand-200 disabled:opacity-60"
           >
             {submit.isPending ? <Loader2 className="size-4 animate-spin" /> : mode === "in" ? "Sign in" : "Create account"}
             {!submit.isPending && <ChevronsRight className="size-4 transition-transform group-hover:translate-x-0.5" />}

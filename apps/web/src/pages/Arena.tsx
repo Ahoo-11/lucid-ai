@@ -1,10 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Check, ChevronDown, ChevronUp, EyeOff, FlaskConical, ListChecks, Plus, Scale, Sparkles, Trophy, X } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, EyeOff, FlaskConical, ListChecks, Plus, Scale, Sparkles, Trophy, X } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import { type BlindPair, type Candidate, type DecisionContext, type Experiment, type Output, type VariantInput, api } from "../api";
 import { ago, cost, duration, plural, toolLabel } from "../format";
-import { Card, Chip, Empty, Prose, Section, cx } from "../ui";
+import { BUTTON, BackLink, Card, Chip, Empty, LABEL, PageHeader, Prose, Section, cx } from "../ui";
+
+/** A text field: model ids, prompts. */
+const FIELD =
+  "w-full rounded-xl border border-zinc-200 bg-white px-3.5 py-2.5 text-sm shadow-[0_1px_2px_rgba(24,24,27,0.04)] outline-none placeholder:text-zinc-400 focus:border-zinc-400 focus:ring-4 focus:ring-zinc-900/5 dark:border-white/10 dark:bg-zinc-950 dark:focus:border-white/25 dark:focus:ring-white/5";
+
+/** A quiet text button that opens or adds something. */
+const MORE_LINK = "inline-flex items-center gap-1 text-xs font-medium text-zinc-600 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-white";
 
 // ── List ──────────────────────────────────────────────────────────────────
 
@@ -12,30 +19,36 @@ export function Arena() {
   const list = useQuery({ queryKey: ["arena", "list"], queryFn: api.arena.list });
   const experiments = list.data?.experiments ?? [];
   return (
-    <div className="space-y-5">
-      <div>
-        <h1 className="text-xl font-semibold">Arena</h1>
-        <p className="text-sm text-zinc-500 dark:text-zinc-400">Replay real decisions with other models or prompts, judge them blind, and switch with proof.</p>
-      </div>
+    <div className="space-y-8">
+      <PageHeader title="Arena" sub="Replay real decisions with other models or prompts, judge them blind, and switch with proof." />
       {list.isPending ? null : experiments.length === 0 ? (
         <HowItWorks />
       ) : (
-        <Card className="divide-y divide-zinc-100 dark:divide-zinc-800">
+        <Card className="divide-y divide-zinc-100 overflow-hidden dark:divide-white/[0.06]">
           {experiments.map((e) => (
-            <Link key={e.id} to={`/arena/${e.id}`} className="flex items-center gap-3 px-4 py-3 hover:bg-zinc-50 dark:hover:bg-zinc-800/40">
-              <FlaskConical className="size-4 shrink-0 text-brand-600" />
+            <Link key={e.id} to={`/arena/${e.id}`} className="flex items-center gap-4 px-5 py-4 transition-colors hover:bg-zinc-50/80 dark:hover:bg-white/[0.03]">
+              <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-zinc-100 text-zinc-600 dark:bg-white/[0.07] dark:text-zinc-300">
+                <FlaskConical className="size-4" />
+              </span>
               <div className="min-w-0 flex-1">
                 <div className="truncate text-sm font-medium">{e.name}</div>
-                <div className="text-xs text-zinc-500">
+                <div className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
                   {plural(e.decisions, "decision")} · {plural(e.candidates, "candidate")} · {plural(e.humanVotes, "vote")}
                   {e.judgeVotes ? ` · ${e.judgeVotes} judge votes` : ""}
                   {e.pending ? ` · ${e.pending} replays running` : ""}
                 </div>
               </div>
-              <span className={cx("rounded-full px-2 py-0.5 text-xs", e.revealed ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400" : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300")}>
+              <span
+                className={cx(
+                  "shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset",
+                  e.revealed
+                    ? "bg-emerald-50 text-emerald-700 ring-emerald-600/15 dark:bg-emerald-500/10 dark:text-emerald-300 dark:ring-emerald-400/20"
+                    : "bg-zinc-100 text-zinc-600 ring-zinc-500/10 dark:bg-white/[0.07] dark:text-zinc-300 dark:ring-white/10",
+                )}
+              >
                 {e.revealed ? "Revealed" : "Blind"}
               </span>
-              <span className="w-20 text-right text-xs text-zinc-400">{ago(e.createdAt)}</span>
+              <span className="hidden w-20 shrink-0 text-right text-xs text-zinc-400 sm:block">{ago(e.createdAt)}</span>
             </Link>
           ))}
         </Card>
@@ -48,31 +61,37 @@ function HowItWorks() {
   return (
     <div className="space-y-4">
       <div className="grid gap-3 sm:grid-cols-3">
-        <StepCard icon={<ListChecks className="size-5" />} title="1. Pick a real decision">
+        <StepCard n={1} icon={<ListChecks className="size-5" />} title="Pick a real decision">
           Open any run, click a model decision, and choose "Try this decision with another model or prompt".
         </StepCard>
-        <StepCard icon={<EyeOff className="size-5" />} title="2. Compare blind">
+        <StepCard n={2} icon={<EyeOff className="size-5" />} title="Compare blind">
           The same request goes to the models you pick. You, and optionally an AI judge, vote on unlabeled answers.
         </StepCard>
-        <StepCard icon={<Trophy className="size-5" />} title="3. Switch with proof">
+        <StepCard n={3} icon={<Trophy className="size-5" />} title="Switch with proof">
           Reveal which was which: "Model X wins 2 of 3 blind votes and costs 40% less."
         </StepCard>
       </div>
       <Card>
-        <Empty icon={<FlaskConical className="size-8" />} title="No experiments yet">
-          Start from a run. <Link to="/runs" className="text-brand-700 underline dark:text-brand-300">Open your runs</Link>
+        <Empty icon={<FlaskConical className="size-6" />} title="No experiments yet">
+          Start from a run.{" "}
+          <Link to="/runs" className="font-medium text-zinc-900 underline underline-offset-2 dark:text-white">
+            Open your runs
+          </Link>
         </Empty>
       </Card>
     </div>
   );
 }
 
-function StepCard({ icon, title, children }: { icon: ReactNode; title: string; children: ReactNode }) {
+function StepCard({ n, icon, title, children }: { n: number; icon: ReactNode; title: string; children: ReactNode }) {
   return (
-    <Card className="p-4">
-      <div className="mb-2 text-brand-700 dark:text-brand-300">{icon}</div>
-      <div className="font-medium">{title}</div>
-      <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">{children}</p>
+    <Card className="p-5">
+      <div className="flex items-center justify-between">
+        <span className="grid size-10 place-items-center rounded-xl bg-zinc-100 text-zinc-700 dark:bg-white/[0.07] dark:text-zinc-200">{icon}</span>
+        <span className={LABEL}>Step {n}</span>
+      </div>
+      <div className="mt-4 font-semibold">{title}</div>
+      <p className="mt-1 text-sm leading-relaxed text-zinc-500 dark:text-zinc-400">{children}</p>
     </Card>
   );
 }
@@ -84,7 +103,7 @@ export function OutputView({ output }: { output: Output | null | undefined }) {
   return (
     <div className="space-y-3">
       {output.toolCalls?.map((call, i) => (
-        <div key={i} className="rounded-lg border border-sky-200 bg-sky-50/60 p-2 dark:border-sky-500/20 dark:bg-sky-500/5">
+        <div key={i} className="rounded-xl border border-sky-200/80 bg-sky-50/60 p-3 dark:border-sky-500/20 dark:bg-sky-500/5">
           <div className="mb-1 text-xs font-semibold text-sky-700 dark:text-sky-300">Uses {toolLabel(call.name)}</div>
           <pre className="max-h-48 overflow-auto font-mono text-[11px] whitespace-pre-wrap">{typeof call.input === "string" ? call.input : JSON.stringify(call.input ?? {}, null, 2)}</pre>
         </div>
@@ -104,11 +123,11 @@ function ContextView({ context }: { context: DecisionContext | null | undefined 
   return (
     <div className="space-y-2 text-sm">
       <div>
-        <span className="text-xs font-semibold uppercase tracking-wide text-zinc-500">The user asked</span>
+        <span className={LABEL}>The user asked</span>
         <p className="mt-0.5 line-clamp-3 whitespace-pre-wrap">{context.request ?? "(not captured)"}</p>
       </div>
       {(context.recent?.length || context.tools?.length) && (
-        <button type="button" onClick={() => setOpen(!open)} className="inline-flex items-center gap-1 text-xs font-medium text-brand-700 dark:text-brand-300">
+        <button type="button" onClick={() => setOpen(!open)} className={MORE_LINK}>
           {open ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
           {open ? "Hide" : "Show"} what the agent had seen
         </button>
@@ -116,8 +135,8 @@ function ContextView({ context }: { context: DecisionContext | null | undefined 
       {open && (
         <div className="space-y-2">
           {context.recent?.map((m, i) => (
-            <div key={i} className="rounded-lg bg-zinc-50 p-2 dark:bg-zinc-950">
-              <div className="text-[11px] font-semibold uppercase text-zinc-500">{m.role}</div>
+            <div key={i} className="rounded-xl bg-zinc-50 p-3 dark:bg-zinc-950">
+              <div className={cx(LABEL, "mb-1")}>{m.role}</div>
               <pre className="max-h-40 overflow-auto font-mono text-[11px] whitespace-pre-wrap">{m.text}</pre>
             </div>
           ))}
@@ -142,7 +161,7 @@ function ModelInput({ value, onChange, models, placeholder }: { value: string; o
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 font-mono text-sm outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-400/30 dark:border-zinc-800 dark:bg-zinc-900"
+        className={cx(FIELD, "font-mono")}
       />
       <datalist id="arena-models">
         {models.map((m) => (
@@ -207,25 +226,21 @@ export function NewExperiment() {
   const ready = variants.some((v) => v.model.trim()) && check.data?.ok && models.data?.configured;
 
   return (
-    <div className="mx-auto max-w-3xl space-y-5">
-      <Link to={runId ? `/runs/${runId}` : "/arena"} className="inline-flex items-center gap-1 text-sm text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100">
-        <ArrowLeft className="size-4" /> Back
-      </Link>
-      <div>
-        <h1 className="text-xl font-semibold">Test a decision</h1>
-        <p className="text-sm text-zinc-500 dark:text-zinc-400">
-          The exact request the agent sent goes to each model you pick. Tools are offered but never run: you compare the next step it would take.
-        </p>
-      </div>
+    <div className="mx-auto max-w-3xl space-y-6">
+      <PageHeader
+        back={<BackLink to={runId ? `/runs/${runId}` : "/arena"}>Back</BackLink>}
+        title="Test a decision"
+        sub="The exact request the agent sent goes to each model you pick. Tools are offered but never run: you compare the next step it would take."
+      />
 
       {models.data && !models.data.configured && (
-        <Card className="border-amber-300 bg-amber-50 p-4 text-sm dark:border-amber-500/30 dark:bg-amber-500/10">
+        <Card className="border-amber-200 bg-amber-50/70 p-5 text-sm dark:border-white/10 dark:bg-white/[0.03]">
           Replays need a model key. Set <code className="font-mono">BASETEN_API_KEY</code> (Meta's Muse Spark) or <code className="font-mono">OPENROUTER_API_KEY</code> (one key reaches every model) for the Lucid server and restart it.
         </Card>
       )}
-      {check.data && !check.data.ok && <Card className="border-rose-300 bg-rose-50 p-4 text-sm dark:border-rose-500/30 dark:bg-rose-500/10">{check.data.reason}</Card>}
+      {check.data && !check.data.ok && <Card className="border-rose-200 bg-rose-50/70 p-5 text-sm dark:border-rose-500/30 dark:bg-rose-500/10">{check.data.reason}</Card>}
 
-      <Card className="space-y-3 p-4">
+      <Card className="space-y-4 p-6">
         <Section title="The decision" hint="What the agent actually did at this point">
           <p className="text-sm">
             {run.data?.run.name ?? "…"}
@@ -245,9 +260,9 @@ export function NewExperiment() {
         )}
       </Card>
 
-      <Card className="space-y-4 p-4">
+      <Card className="space-y-4 p-6">
         <Section title="Contenders" hint="The original is always included, under a blind label like the others">
-          <div className="flex items-center gap-2 rounded-lg bg-zinc-50 px-3 py-2 text-sm dark:bg-zinc-950">
+          <div className="flex items-center gap-2 rounded-xl bg-zinc-50 px-3.5 py-2.5 text-sm dark:bg-zinc-950">
             <Check className="size-4 text-emerald-500" />
             <span className="font-medium">The original</span>
             <span className="text-zinc-500">what the agent actually did{run.data?.run.model ? ` (${run.data.run.model})` : ""}</span>
@@ -255,7 +270,7 @@ export function NewExperiment() {
           {variants.map((variant, i) => {
             const price = priceOf.get(variant.model.trim());
             return (
-              <div key={i} className="space-y-2 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
+              <div key={i} className="space-y-2.5 rounded-xl border border-zinc-200 p-4 dark:border-white/10">
                 <div className="flex items-center gap-2">
                   <ModelInput value={variant.model} onChange={(model) => update(i, { model })} models={models.data?.models ?? []} placeholder={onlyModel ? `Model, e.g. ${onlyModel}` : "Model, e.g. openai/gpt-5-mini"} />
                   {variants.length > 1 && (
@@ -273,7 +288,7 @@ export function NewExperiment() {
                   </div>
                 )}
                 {variant.model.trim() && !price && models.data?.models.length ? <div className="text-xs text-amber-600">Not in the tool-capable model list; it may not support tools.</div> : null}
-                <button type="button" onClick={() => update(i, { promptOpen: !variant.promptOpen })} className="inline-flex items-center gap-1 text-xs font-medium text-brand-700 dark:text-brand-300">
+                <button type="button" onClick={() => update(i, { promptOpen: !variant.promptOpen })} className={MORE_LINK}>
                   {variant.promptOpen ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
                   Change the system prompt too
                 </button>
@@ -292,7 +307,7 @@ export function NewExperiment() {
                       onChange={(e) => update(i, { prompt: e.target.value })}
                       rows={4}
                       placeholder="e.g. Always look at files with your tools before answering questions about them."
-                      className="w-full rounded-lg border border-zinc-200 bg-white p-2 text-sm dark:border-zinc-800 dark:bg-zinc-900"
+                      className={FIELD}
                     />
                   </div>
                 )}
@@ -304,7 +319,7 @@ export function NewExperiment() {
               type="button"
               // With one model on offer, another contender means the same model with a different prompt.
               onClick={() => setVariants((all) => [...all, onlyModel ? { ...emptyVariant(), model: onlyModel, promptOpen: true } : emptyVariant()])}
-              className="inline-flex items-center gap-1 text-sm font-medium text-brand-700 dark:text-brand-300"
+              className={BUTTON.secondary}
             >
               <Plus className="size-4" /> {onlyModel ? "Add Muse Spark with a different prompt" : "Add another model or prompt"}
             </button>
@@ -312,20 +327,15 @@ export function NewExperiment() {
         </Section>
       </Card>
 
-      <Card className="space-y-2 p-4">
+      <Card className="space-y-2 p-6">
         <Section title="AI judge (optional)" hint="A second opinion. It never sees model names and votes twice with the order swapped; a verdict counts only if it doesn't flip.">
           <ModelInput value={judge} onChange={setJudge} models={models.data?.models ?? []} placeholder="Judge model" />
         </Section>
       </Card>
 
       <div className="flex items-center justify-between gap-3">
-        <span className="text-sm text-zinc-500">{estimate > 0 ? `Replays cost about ${cost(estimate)} on your key` : ""}</span>
-        <button
-          type="button"
-          disabled={!ready || create.isPending}
-          onClick={() => create.mutate()}
-          className="inline-flex items-center gap-2 rounded-lg bg-brand-300 px-4 py-2 text-sm font-medium text-zinc-950 hover:bg-brand-200 disabled:opacity-40"
-        >
+        <span className="text-sm text-zinc-500 dark:text-zinc-400">{estimate > 0 ? `Replays cost about ${cost(estimate)} on your key` : ""}</span>
+        <button type="button" disabled={!ready || create.isPending} onClick={() => create.mutate()} className={cx(BUTTON.primary, "h-10 px-5")}>
           <FlaskConical className="size-4" />
           {create.isPending ? "Starting…" : "Start the blind test"}
         </button>
@@ -382,13 +392,16 @@ export function ExperimentPage() {
   const replaying = progress.replays.pending > 0;
 
   return (
-    <div className="space-y-5">
-      <Link to="/arena" className="inline-flex items-center gap-1 text-sm text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100">
-        <ArrowLeft className="size-4" /> Arena
-      </Link>
-      <div>
-        <h1 className="text-xl font-semibold">{data.experiment.name}</h1>
-        <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-sm text-zinc-500 dark:text-zinc-400">
+    <div className="space-y-6">
+      <PageHeader
+        back={<BackLink to="/arena">Arena</BackLink>}
+        title={
+          <span className="line-clamp-2 text-xl leading-snug sm:text-2xl" title={data.experiment.name}>
+            {data.experiment.name}
+          </span>
+        }
+        sub={
+          <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
           <span>{plural(data.items.length, "decision")}</span>
           <span>{plural(data.candidates.length, "candidate")}</span>
           <span>
@@ -398,21 +411,22 @@ export function ExperimentPage() {
           <span>
             Your votes {progress.humanVotes}/{progress.pairs}
           </span>
-          <span>
-            AI judge {progress.judgeVotes}/{progress.pairs}
-          </span>
-        </div>
-      </div>
+            <span>
+              AI judge {progress.judgeVotes}/{progress.pairs}
+            </span>
+          </div>
+        }
+      />
 
       {replaying ? (
-        <Card className="flex items-center gap-3 p-5 text-sm">
+        <Card className="flex items-center gap-3 p-6 text-sm">
           <span className="size-2 animate-pulse rounded-full bg-amber-400" />
           Replaying the decision with each candidate… {progress.replays.done} of {progress.replays.total} done.
         </Card>
       ) : pair.data?.pair ? (
         <VotePanel pair={pair.data} index={data.items.findIndex((i) => i.id === pair.data!.pair!.itemId)} total={data.items.length} onVote={(w) => vote.mutate(w)} busy={vote.isPending} />
       ) : (
-        <Card className="flex items-center gap-3 p-5 text-sm">
+        <Card className="flex items-center gap-3 p-6 text-sm">
           <Check className="size-4 text-emerald-500" />
           {progress.humanVotes ? "You've voted on every pair." : "Nothing to vote on: no pair of candidates finished."}
           {!data.experiment.revealed && progress.humanVotes > 0 && " Reveal which candidate is which below."}
@@ -420,12 +434,12 @@ export function ExperimentPage() {
       )}
 
       {progress.replays.failed > 0 && (
-        <button type="button" onClick={() => retry.mutate()} className="text-sm text-brand-700 underline dark:text-brand-300">
+        <button type="button" onClick={() => retry.mutate()} className="text-sm font-medium text-zinc-700 underline underline-offset-2 dark:text-zinc-200">
           Retry {plural(progress.replays.failed, "failed replay")}
         </button>
       )}
 
-      <Card className="space-y-3 p-4">
+      <Card className="space-y-3 p-6">
         <Section title="AI judge" hint="Votes on every pair, twice with the order swapped. A verdict that flips counts as a tie.">
           <div className="flex flex-wrap items-center gap-2">
             <div className="min-w-64 flex-1">
@@ -435,7 +449,7 @@ export function ExperimentPage() {
               type="button"
               disabled={replaying || progress.judging || judge.isPending || !(judgeModel || data.experiment.judgeModel)}
               onClick={() => judge.mutate()}
-              className="inline-flex items-center gap-2 rounded-lg border border-zinc-200 px-3 py-2 text-sm font-medium hover:bg-zinc-50 disabled:opacity-40 dark:border-zinc-700 dark:hover:bg-zinc-800"
+              className={cx(BUTTON.secondary, "h-10")}
             >
               <Scale className="size-4" />
               {progress.judging ? "Judging…" : progress.judgeVotes ? "Judge new pairs" : "Ask the AI judge"}
@@ -458,18 +472,18 @@ export function ExperimentPage() {
 function VotePanel({ pair, index, total, onVote, busy }: { pair: BlindPair; index: number; total: number; onVote: (w: "a" | "b" | "tie") => void; busy: boolean }) {
   const p = pair.pair!;
   return (
-    <Card className="space-y-4 p-4">
+    <Card className="space-y-5 p-6">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="font-semibold">Which next step is better?</h2>
-        <span className="text-xs text-zinc-500">
+        <h2 className="font-display text-xl font-bold tracking-tight">Which next step is better?</h2>
+        <span className="text-xs text-zinc-500 dark:text-zinc-400">
           Decision {index + 1} of {total} · comparison {pair.progress.voted + 1} of {pair.progress.total}
         </span>
       </div>
       <ContextView context={p.context} />
       <div className="grid gap-3 md:grid-cols-2">
         {(["a", "b"] as const).map((side) => (
-          <div key={side} className="rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
-            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">Response {side.toUpperCase()}</div>
+          <div key={side} className="rounded-xl border border-zinc-200 p-4 dark:border-white/10">
+            <div className={cx(LABEL, "mb-3")}>Response {side.toUpperCase()}</div>
             <OutputView output={p[side].output} />
           </div>
         ))}
@@ -495,10 +509,10 @@ function VoteButton({ onClick, disabled, hotkey, children }: { onClick: () => vo
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className="inline-flex items-center gap-2 rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium hover:border-brand-500 hover:bg-brand-50 disabled:opacity-40 dark:border-zinc-700 dark:hover:bg-brand-400/10"
+      className={cx(BUTTON.secondary, "h-10 gap-2 px-4")}
     >
       {children}
-      <kbd className="rounded border border-zinc-300 px-1 font-mono text-[10px] text-zinc-500 dark:border-zinc-600">{hotkey}</kbd>
+      <kbd className="rounded border border-zinc-300 bg-zinc-50 px-1 font-mono text-[10px] text-zinc-500 dark:border-white/15 dark:bg-white/5">{hotkey}</kbd>
     </button>
   );
 }
@@ -516,7 +530,7 @@ function Results({ data, onReveal, revealing }: { data: Experiment; onReveal: ()
   const useHuman = data.progress.humanVotes > 0;
   const ranked = [...data.candidates].sort((a, b) => ((useHuman ? b.human : b.judge)?.rating ?? -Infinity) - ((useHuman ? a.human : a.judge)?.rating ?? -Infinity));
   return (
-    <Card className="space-y-4 p-4">
+    <Card className="space-y-4 p-6">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <Section title="Standings" hint="Ratings use the Bradley-Terry model (as Elo-style leaderboards do); ties count as half a win.">
           <span />
@@ -526,7 +540,7 @@ function Results({ data, onReveal, revealing }: { data: Experiment; onReveal: ()
             type="button"
             onClick={onReveal}
             disabled={revealing || (data.progress.humanVotes === 0 && data.progress.judgeVotes === 0)}
-            className="inline-flex items-center gap-2 rounded-lg bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-40 dark:bg-white dark:text-zinc-900"
+            className={BUTTON.dark}
             title="Shows which model and prompt each candidate is. Vote first, so the names can't sway you."
           >
             <Sparkles className="size-4" /> Reveal which is which
@@ -535,32 +549,32 @@ function Results({ data, onReveal, revealing }: { data: Experiment; onReveal: ()
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-left text-sm">
-          <thead className="text-xs text-zinc-500">
-            <tr className="border-b border-zinc-100 dark:border-zinc-800">
-              <th className="py-2 pr-3 font-medium">Candidate</th>
-              <th className="py-2 pr-3 font-medium" title="Your blind votes: wins + half of ties, over comparisons">Your votes</th>
-              <th className="py-2 pr-3 font-medium" title="The AI judge's blind votes">AI judge</th>
-              <th className="py-2 pr-3 font-medium" title="Average model cost per decision">Cost</th>
-              <th className="py-2 pr-3 font-medium" title="Average time to decide">Speed</th>
-              {revealed && <th className="py-2 pr-3 font-medium" title="How often it chose the same tools as the original">Same tools as original</th>}
+          <thead className={cx(LABEL, "[&_th]:whitespace-nowrap")}>
+            <tr className="border-b border-zinc-100 dark:border-white/[0.06]">
+              <th className="py-2.5 pr-3 font-medium">Candidate</th>
+              <th className="py-2.5 pr-3 font-medium" title="Your blind votes: wins + half of ties, over comparisons">Your votes</th>
+              <th className="py-2.5 pr-3 font-medium" title="The AI judge's blind votes">AI judge</th>
+              <th className="py-2.5 pr-3 font-medium" title="Average model cost per decision">Cost</th>
+              <th className="py-2.5 pr-3 font-medium" title="Average time to decide">Speed</th>
+              {revealed && <th className="py-2.5 pr-3 font-medium" title="How often it chose the same tools as the original">Same tools as original</th>}
             </tr>
           </thead>
           <tbody>
             {ranked.map((c) => (
-              <tr key={c.id} className="border-b border-zinc-50 last:border-0 dark:border-zinc-800/60">
-                <td className="py-2 pr-3">
+              <tr key={c.id} className="border-b border-zinc-100 last:border-0 dark:border-white/[0.06]">
+                <td className="py-3 pr-3">
                   <div className="font-medium">{revealed ? candidateName(c) : c.label}</div>
                   {revealed && c.systemPrompt && <div className="max-w-sm truncate text-xs text-zinc-500" title={c.systemPrompt}>{c.promptMode === "replace" ? "Prompt: " : "Added: "}{c.systemPrompt}</div>}
                   {c.trials.failed > 0 && <div className="text-xs text-rose-600">{plural(c.trials.failed, "replay")} failed{revealed && c.errors?.[0] ? `: ${c.errors[0]}` : ""}</div>}
                 </td>
-                <td className="py-2 pr-3 tabular-nums">
+                <td className="py-3 pr-3 tabular-nums">
                   {pct(c.human?.winRate)}
                   {c.human?.games ? <span className="ml-1 text-xs text-zinc-400">{c.human.wins}–{c.human.ties}–{c.human.losses}</span> : null}
                 </td>
-                <td className="py-2 pr-3 tabular-nums">{pct(c.judge?.winRate)}</td>
-                <td className="py-2 pr-3 tabular-nums">{cost(c.avgCostUsd)}</td>
-                <td className="py-2 pr-3 tabular-nums">{duration(c.avgLatencyMs)}</td>
-                {revealed && <td className="py-2 pr-3 tabular-nums">{pct(c.sameToolAsOriginal)}</td>}
+                <td className="py-3 pr-3 tabular-nums">{pct(c.judge?.winRate)}</td>
+                <td className="py-3 pr-3 tabular-nums">{cost(c.avgCostUsd)}</td>
+                <td className="py-3 pr-3 tabular-nums">{duration(c.avgLatencyMs)}</td>
+                {revealed && <td className="py-3 pr-3 tabular-nums">{pct(c.sameToolAsOriginal)}</td>}
               </tr>
             ))}
           </tbody>
@@ -586,9 +600,11 @@ function Recommendation({ data, ranked, useHuman }: { data: Experiment; ranked: 
   const tied = best.id !== original.id && standing(best)?.rating === standing(original)?.rating;
 
   return (
-    <div className="rounded-xl border border-brand-200 bg-brand-50 p-4 dark:border-brand-400/30 dark:bg-brand-400/10">
-      <div className="flex items-start gap-3">
-        <Trophy className="mt-0.5 size-5 shrink-0 text-brand-700 dark:text-brand-300" />
+    <div className="rounded-xl bg-zinc-50 p-5 ring-1 ring-zinc-200 ring-inset dark:bg-white/[0.03] dark:ring-white/10">
+      <div className="flex items-start gap-3.5">
+        <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-brand-300 text-zinc-950">
+          <Trophy className="size-4" />
+        </span>
         <div className="space-y-1 text-sm">
           {best.id === original.id ? (
             <p className="font-semibold">Keep what you have: the original won {pct(standing(original)?.winRate)} of {source}.</p>

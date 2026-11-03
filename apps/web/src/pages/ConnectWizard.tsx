@@ -105,7 +105,7 @@ export function ConnectWizard({
       // A click on the dialog itself, not its content, is a click on the backdrop.
       onClick={(event) => event.target === event.currentTarget && ref.current?.close()}
       // Anchored near the top, so a taller step grows downward instead of jumping.
-      className="mx-auto mt-[max(0.75rem,8dvh)] max-h-[calc(100dvh-max(0.75rem,8dvh)-0.75rem)] w-[calc(100%-1.5rem)] max-w-2xl overflow-hidden rounded-3xl bg-white p-0 text-zinc-900 shadow-2xl ring-1 ring-black/5 backdrop:bg-zinc-950/70 backdrop:backdrop-blur-sm open:motion-safe:animate-[rise_.25s_ease-out] dark:bg-zinc-900 dark:text-zinc-100 dark:ring-white/10"
+      className="mx-auto mt-[max(0.75rem,8dvh)] max-h-[calc(100dvh-max(0.75rem,8dvh)-0.75rem)] w-[calc(100%-1.5rem)] max-w-2xl overflow-hidden rounded-3xl bg-white p-0 text-zinc-900 shadow-2xl shadow-zinc-900/10 ring-1 ring-black/5 backdrop:bg-zinc-900/40 backdrop:backdrop-blur-sm open:motion-safe:animate-[rise_.25s_ease-out] dark:bg-zinc-900 dark:text-zinc-100 dark:ring-white/10 dark:backdrop:bg-zinc-950/70"
     >
       {open && <Wizard initialAgent={initialAgent} newKey={newKey} onKey={onKey} close={() => ref.current?.close()} />}
     </dialog>
@@ -404,8 +404,7 @@ function Done({ agent, first, onSee, onAnother }: { agent: AgentChoice; first: b
   return (
     <div className="flex flex-col items-center py-6 text-center sm:py-10">
       <div className="relative">
-        <span className="absolute inset-0 rounded-full bg-brand-300/60 motion-safe:animate-ping" />
-        <span className="relative flex size-20 items-center justify-center rounded-full bg-brand-300 text-zinc-950 shadow-[0_10px_40px_-8px_rgba(216,248,74,0.7)]">
+        <span className="relative flex size-20 items-center justify-center rounded-full bg-brand-300 text-zinc-950 ring-8 ring-brand-300/25 motion-safe:animate-[rise_.4s_ease-out]">
           <Check className="size-10" strokeWidth={2.5} />
         </span>
         <LogoWell size="size-9 rounded-xl" className="absolute -right-3 -bottom-2">
@@ -420,7 +419,7 @@ function Done({ agent, first, onSee, onAnother }: { agent: AgentChoice; first: b
         <button
           type="button"
           onClick={onSee}
-          className="group inline-flex items-center gap-2 rounded-full bg-brand-300 px-5 py-2.5 text-sm font-semibold text-zinc-950 shadow-[0_10px_40px_-12px_rgba(216,248,74,0.6)] transition hover:bg-brand-200"
+          className="group inline-flex items-center gap-2 rounded-full bg-brand-300 px-5 py-2.5 text-sm font-semibold text-zinc-950 ring-1 ring-black/5 ring-inset transition hover:bg-brand-200"
         >
           See your runs
           <ArrowRight className="size-4 transition-transform group-hover:translate-x-0.5" />
