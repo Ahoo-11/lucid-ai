@@ -13,7 +13,7 @@ import { Arena, ExperimentPage, NewExperiment } from "./pages/Arena";
 import { Connect } from "./pages/Connect";
 import { Inbox, needsFix } from "./pages/Inbox";
 import { LinkPage } from "./pages/Link";
-import { RunPage } from "./pages/Run";
+import { SessionRoute } from "./pages/Session";
 import { Runs } from "./pages/Runs";
 import { useSyncs } from "./syncs";
 import { setTheme, useTheme } from "./theme";
@@ -27,14 +27,16 @@ function Home() {
   return <Navigate to={hasRuns ? "/inbox" : "/connect"} replace />;
 }
 
-function Tab({ to, children, badge, busy }: { to: string; children: string; badge?: number; busy?: string }) {
+/** `also`: another path the tab's pages live under (a session opens at /sessions/…, the list is /runs). */
+function Tab({ to, also, children, badge, busy }: { to: string; also?: string; children: string; badge?: number; busy?: string }) {
+  const { pathname } = useLocation();
   return (
     <NavLink
       to={to}
       className={({ isActive }) =>
         cx(
           "relative flex flex-1 shrink-0 items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition sm:flex-none",
-          isActive
+          isActive || (also && pathname.startsWith(also))
             ? "bg-white text-zinc-900 shadow-[0_1px_2px_rgba(24,24,27,0.08)] ring-1 ring-black/5 dark:bg-zinc-800 dark:text-white dark:ring-white/5"
             : "text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white",
         )
@@ -144,8 +146,8 @@ function Shell({ account }: { account: ReactNode }) {
             <Tab to="/inbox" badge={issues.data?.issues.filter(needsFix).length}>
               Inbox
             </Tab>
-            <Tab to="/runs" busy={syncing ? "Bringing in past runs" : undefined}>
-              Runs
+            <Tab to="/runs" also="/sessions" busy={syncing ? "Bringing in past runs" : undefined}>
+              Sessions
             </Tab>
             <Tab to="/arena">Arena</Tab>
             <Tab to="/connect">Connect</Tab>
@@ -168,7 +170,9 @@ function Shell({ account }: { account: ReactNode }) {
           <Route path="/" element={<Home />} />
           <Route path="/inbox" element={<Inbox />} />
           <Route path="/runs" element={<Runs />} />
-          <Route path="/runs/:id" element={<RunPage />} />
+          <Route path="/runs/:id" element={<SessionRoute by="run" />} />
+          <Route path="/sessions" element={<Navigate to="/runs" replace />} />
+          <Route path="/sessions/:id" element={<SessionRoute by="session" />} />
           <Route path="/arena" element={<Arena />} />
           <Route path="/arena/new" element={<NewExperiment />} />
           <Route path="/arena/:id" element={<ExperimentPage />} />

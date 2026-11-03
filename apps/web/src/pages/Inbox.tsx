@@ -480,7 +480,7 @@ function ProblemPanel({ issue, model, onClose, onIgnored }: { issue: Issue; mode
     onSettled: refresh,
   });
   const runTest = useMutation({
-    mutationFn: () => api.testFix(issue.id, text),
+    mutationFn: () => api.testFix(issue.id, text, true),
     onSuccess: ({ fixTest }) => patch({ fixTest }),
     onSettled: refresh,
   });
@@ -488,6 +488,8 @@ function ProblemPanel({ issue, model, onClose, onIgnored }: { issue: Issue; mode
   const testing = runTest.isPending || issue.fixTest?.status === "running";
   const copy = () => void navigator.clipboard.writeText(text).then(() => setCopied(true));
   const error = [apply, turnOff, ignore, diagnose, runTest].find((m) => m.isError)?.error;
+  // A fix not yet passed is tested first, and the server applies it when it passes.
+  const testFirst = !issue.ignored && !active && !!proposed && issue.lessonsApply && test?.status !== "passed" && test?.status !== "untestable";
 
   const primary = issue.ignored ? (
     <button type="button" onClick={() => ignore.mutate(false)} disabled={ignore.isPending} className={SECONDARY}>
@@ -508,10 +510,10 @@ function ProblemPanel({ issue, model, onClose, onIgnored }: { issue: Issue; mode
       <Copy className="size-3.5" />
       {copied ? "Copied" : "Copy fix"}
     </button>
-  ) : proposed && issue.lessonsApply ? (
+  ) : testFirst ? (
     <button type="button" onClick={() => runTest.mutate()} disabled={testing || !text.trim() || !model} className={PRIMARY}>
       {testing ? <Loader2 className="size-3.5 animate-spin" /> : <FlaskConical className="size-3.5" />}
-      {testing ? "Testing…" : test ? "Test again" : "Test fix"}
+      {testing ? "Testing…" : "Test & Apply Fix"}
     </button>
   ) : proposed ? (
     <button type="button" onClick={copy} disabled={!text.trim()} className={PRIMARY}>
@@ -622,6 +624,7 @@ function ProblemPanel({ issue, model, onClose, onIgnored }: { issue: Issue; mode
             </button>
           )}
         </div>
+        {testFirst && <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">The fix is only applied if testing succeeds.</p>}
       </div>
     </div>
   );
@@ -759,7 +762,12 @@ function TestStatus({ test, edited, running, model, agent }: { test: FixTest | n
           </button>
         </span>
       </p>
-      {test.revisedFrom && <p>{modelLabel(test.model)} rewrote the fix after the first version failed, then tested it again.</p>}
+      {test.revisedFrom && (
+        <p>
+          {modelLabel(test.model)} rewrote the fix after the first version failed, then tested it again.
+          {test.status === "passed" && " Since the words changed, Lucid didn't apply it by itself: read them, then apply."}
+        </p>
+      )}
       {test.standIn && (
         <p>
           Replayed with {modelLabel(test.model)} standing in for {test.standIn}, the model {agent} uses.

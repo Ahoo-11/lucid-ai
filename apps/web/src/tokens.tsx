@@ -50,7 +50,7 @@ export const percent = (share: number) => (share > 0 && share < 0.01 ? "<1%" : `
  * Where the money goes: how many tokens of each kind, what they cost at list
  * prices, and their share of the cost (of the tokens, when no price is known).
  */
-export function TokenBreakdown({ t, split }: { t: TokenCounts; split: CostSplit | null }) {
+export function TokenBreakdown({ t, split, compact }: { t: TokenCounts; split: CostSplit | null; compact?: boolean }) {
   const priced = split && split.input + split.cacheRead + split.cacheWrite + split.output > 0 ? split : null;
   const rows = KINDS.map((kind) => ({ ...kind, tokens: t[kind.count] ?? 0, usd: priced ? priced[kind.key] : null }));
   const base = priced ? rows.reduce((sum, row) => sum + row.usd!, 0) : rows.reduce((sum, row) => sum + row.tokens, 0);
@@ -65,7 +65,7 @@ export function TokenBreakdown({ t, split }: { t: TokenCounts; split: CostSplit 
             <div key={row.key} className={cx("h-full min-w-0.5", row.color)} style={{ width: `${shareOf(row) * 100}%` }} title={`${row.label}: ${percent(shareOf(row))}`} />
           ))}
       </div>
-      <dl className="mt-4 grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4">
+      <dl className={cx("mt-4 grid grid-cols-2 gap-x-6 gap-y-4", !compact && "sm:grid-cols-4")}>
         {rows.map((row) => (
           <div key={row.key} title={row.hint}>
             <dt className="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">

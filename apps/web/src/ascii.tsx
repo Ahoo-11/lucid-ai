@@ -1,7 +1,8 @@
 // A faint field of ASCII characters drifting behind the app, like a shader
 // drawn in text: grey on the paper (light on black in dark mode), densest at
 // the top and gone by the middle of the screen, so the cards stay clean.
-// Still for people who ask for less motion.
+// Still for people who ask for less motion. AsciiPicture, further down, draws a
+// picture through the same filter.
 
 import { useEffect, useRef } from "react";
 import { type Theme, useTheme } from "./theme";
@@ -157,4 +158,122 @@ export function AsciiField() {
   }, [theme]);
 
   return <canvas ref={ref} aria-hidden className="pointer-events-none fixed inset-0 -z-10 size-full" />;
+}
+
+/** For pictures: a slightly heavier ramp, so dark and saturated parts read as dense type. */
+const PICTURE_RAMP = " .:-=+*#%";
+
+/**
+ * A picture through the ASCII filter, at low power: the picture stays,
+ * softened, and every cell gets a character in that cell's own colour,
+ * denser where the picture is darker or more saturated. So the agents keep
+ * the faces people know them by. `strength` 0 is the plain picture, 1 is
+ * type only. The characters type themselves in once, then it holds still.
+ */
+export function AsciiPicture({ src, ratio, alt, strength = 0.5, cell = 6, className }: { src: string; ratio: number; alt: string; strength?: number; cell?: number; className?: string }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    const canvas = ref.current;
+    const ctx = canvas?.getContext("2d");
+    if (!canvas || !ctx) return;
+    const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const img = new Image();
+    let cells: Uint8ClampedArray | null = null;
+    let cols = 0;
+    let rows = 0;
+    let cw = 0;
+    let ch = 0;
+    let font = "";
+
+    const size = () => {
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      canvas.width = Math.round(canvas.clientWidth * dpr);
+      canvas.height = Math.round(canvas.clientHeight * dpr);
+      // Finer type on a small picture, so it stays a texture rather than taking over.
+      const unit = Math.max(3.5, Math.min(cell, canvas.clientWidth / 140));
+      cw = unit * dpr;
+      ch = unit * 1.6 * dpr;
+      cols = Math.ceil(canvas.width / cw);
+      rows = Math.ceil(canvas.height / ch);
+      // One pixel per cell: the browser averages each cell's colour while it scales down.
+      const small = document.createElement("canvas");
+      small.width = cols;
+      small.height = rows;
+      const sctx = small.getContext("2d")!;
+      sctx.imageSmoothingQuality = "high";
+      sctx.drawImage(img, 0, 0, cols, rows);
+      cells = sctx.getImageData(0, 0, cols, rows).data;
+      font = `${unit * 1.5 * dpr}px "Geist Mono Variable", ui-monospace, Menlo, Consolas, monospace`;
+    };
+
+    /** `shown`: how far the characters have typed in, 0 to 1. */
+    const draw = (shown: number) => {
+      if (!cells) return;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.globalAlpha = (1 - 0.75 * strength) * Math.min(1, shown * 1.5);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      ctx.globalAlpha = 1;
+      ctx.font = font;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      const alpha = 0.3 + 0.7 * strength;
+      for (let row = 0; row < rows; row++) {
+        for (let col = 0; col < cols; col++) {
+          if (shown < 1 && hash(col, row) > shown) continue;
+          const i = (row * cols + col) * 4;
+          const a = cells[i + 3]! / 255;
+          if (a < 0.2) continue;
+          const r = cells[i]!;
+          const g = cells[i + 1]!;
+          const b = cells[i + 2]!;
+          const light = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+          const vivid = (Math.max(r, g, b) - Math.min(r, g, b)) / 255;
+          const ink = a * Math.max(1 - light, vivid * 0.9);
+          const index = Math.round(ink * (PICTURE_RAMP.length - 1));
+          if (!index) continue;
+          // A shade darker than the picture under it, so the type shows on its own colour.
+          ctx.fillStyle = `rgba(${r * 0.8}, ${g * 0.8}, ${b * 0.8}, ${alpha})`;
+          ctx.fillText(PICTURE_RAMP[index]!, col * cw + cw / 2, row * ch + ch / 2);
+        }
+      }
+    };
+
+    let frame = 0;
+    const typeIn = () => {
+      const began = performance.now();
+      const tick = (now: number) => {
+        const t = Math.min(1, (now - began) / 1_100);
+        draw(1 - (1 - t) ** 3);
+        if (t < 1) frame = requestAnimationFrame(tick);
+      };
+      frame = requestAnimationFrame(tick);
+    };
+
+    let ready = false;
+    const observer = new ResizeObserver(() => {
+      if (!ready) return;
+      size();
+      draw(1);
+    });
+    let cancelled = false;
+    img.onload = () => {
+      void Promise.race([document.fonts.load(`${cell * 1.5}px "Geist Mono Variable"`), new Promise((done) => setTimeout(done, 1_500))]).then(() => {
+        if (cancelled) return;
+        ready = true;
+        size();
+        if (still) draw(1);
+        else typeIn();
+      });
+    };
+    img.src = src;
+    observer.observe(canvas);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [src, strength, cell]);
+
+  return <canvas ref={ref} role="img" aria-label={alt} className={className} style={{ display: "block", width: "100%", aspectRatio: String(ratio) }} />;
 }

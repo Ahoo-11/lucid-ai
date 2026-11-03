@@ -1,221 +1,46 @@
+// The pieces of a session's workings: the step timeline, and the detail of a
+// step for the side panel.
+
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, FlaskConical } from "lucide-react";
-import { type ReactNode, useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router";
-import { type RunDetail, type Step, api } from "../api";
-import { cost, dateTime, duration, harnessLabel, mcpParts, plural, tokens, toolLabel } from "../format";
-import { type Node, type Row, type Turn, argSummary, buildTree, contextTokens, story, toRows, toTurns } from "../story";
-import { InOut, TokenBreakdown } from "../tokens";
-import { BackLink, Card, Chip, KindIcon, LABEL, Prose, Section, Stat, StatusDot, StatusPill, cx, kindLabel } from "../ui";
+import { ChevronDown, ChevronRight, ChevronUp, FlaskConical } from "lucide-react";
+import { type ReactNode, useState } from "react";
+import { Link } from "react-router";
+import { type Step, api } from "../api";
+import { cost, dateTime, duration, mcpParts, plural, tokens, toolLabel } from "../format";
+import { type Node, type Row, type Turn, argSummary, contextTokens, toRows, toTurns } from "../story";
+import { InOut } from "../tokens";
+import { Card, Chip, KindIcon, LABEL, Prose, Section, StatusDot, cx, kindLabel } from "../ui";
 
-export function RunPage() {
-  const { id = "" } = useParams();
-  const query = useQuery({ queryKey: ["run", id], queryFn: () => api.run(id) });
-  const [selected, setSelected] = useState<string | null>(null);
-  const data = query.data;
-  const tree = useMemo(() => (data ? buildTree(data.steps) : []), [data]);
-  const order = useMemo(() => data?.steps.map((step) => step.externalId) ?? [], [data]);
-
-  // j / k walk through steps, like an inbox.
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
-      if (event.key !== "j" && event.key !== "k") return;
-      const index = selected ? order.indexOf(selected) : -1;
-      const next = order[Math.min(order.length - 1, Math.max(0, index + (event.key === "j" ? 1 : -1)))];
-      if (next) setSelected(next);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [order, selected]);
-
-  if (query.isPending) return <div className="text-sm text-zinc-500">Loading run…</div>;
-  if (query.isError || !data) return <div className="text-sm text-rose-600">Could not load this run: {String(query.error?.message ?? "not found")}</div>;
-
-  const { run } = data;
-  const step = data.steps.find((s) => s.externalId === selected) ?? null;
-  const context = Math.max(0, ...data.steps.filter((s) => s.kind === "llm").map(contextTokens));
-
-  return (
-    <div className="space-y-6">
-      <RunHeader data={data} />
-
-      <Card className="grid grid-cols-2 gap-x-6 gap-y-5 px-6 py-5 sm:grid-cols-3 lg:grid-cols-6">
-        <Stat label="Duration" value={duration(run.durationMs)} hint="From the request to the agent's last step" />
-        <Stat
-          label="Cost"
-          value={`${cost(run.costUsd)}${run.costIncomplete ? "+" : ""}`}
-          hint={run.costIncomplete ? "Some model calls have no known price, so this is a minimum" : "Total model cost of this run, including sub-agents"}
-        />
-        <Stat label="Model calls" value={run.llmCallCount} hint="How many times the agent asked the model what to do next" />
-        <Stat label="Tool calls" value={run.toolCallCount} hint="Actions the agent took: reading files, running commands, calling APIs, launching sub-agents" />
-        <Stat label="Failed steps" value={run.errorCount} hint="Tool calls or model calls that returned an error" tone={run.errorCount ? "bad" : undefined} />
-        <Stat
-          label="Largest context"
-          value={tokens(context)}
-          hint="The most tokens the model had to read in a single call (new input + cached). Large contexts are slower and cost more."
-        />
-      </Card>
-
-      {run.llmCallCount > 0 && (
-        <Card className="px-6 py-5">
-          <div className="mb-4 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-            <h2 className="text-[15px] font-semibold">Tokens and cost</h2>
-            <span className="text-xs text-zinc-500 dark:text-zinc-400">
-              <InOut t={run} /> across {plural(run.llmCallCount, "model call")}
-              {data.costSplit && " · cost by kind is estimated from list prices"}
-            </span>
-          </div>
-          <TokenBreakdown t={run} split={data.costSplit} />
-        </Card>
-      )}
-
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,440px)]">
-        <div className="min-w-0 space-y-6">
-          <RequestAndAnswer data={data} />
-          <Card className="p-5">
-            <Section title="What happened" hint="Each model decision and the actions it led to. Press j / k to step through.">
-              <Timeline nodes={tree} selected={selected} onSelect={setSelected} />
-            </Section>
-          </Card>
-        </div>
-        <div className="min-w-0">
-          <div className="lg:sticky lg:top-24 lg:max-h-[calc(100dvh-7.5rem)] lg:overflow-y-auto">
-            {step ? (
-              <StepDetail step={step} steps={data.steps} onClose={() => setSelected(null)} />
-            ) : (
-              <Card className="p-6 text-sm leading-relaxed text-zinc-500 dark:text-zinc-400">
-                <div className="font-display text-lg font-bold tracking-tight text-zinc-900 dark:text-zinc-100">Pick a step</div>
-                <p className="mt-1.5">
-                  Click any decision to see what the agent knew, which tools it could have used, what it chose and why. Click an action to see its input and result.
-                </p>
-              </Card>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function RunHeader({ data }: { data: RunDetail }) {
-  const { run, session, sessionRuns } = data;
-  const index = sessionRuns.findIndex((r) => r.id === run.id);
-  const prev = index > 0 ? sessionRuns[index - 1] : undefined;
-  const next = index >= 0 && index < sessionRuns.length - 1 ? sessionRuns[index + 1] : undefined;
-  const parts = story(buildTree(data.steps), run.status);
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between gap-2 text-sm text-zinc-500 dark:text-zinc-400">
-        <BackLink to="/runs">Runs</BackLink>
-        {sessionRuns.length > 1 && (
-          <div className="flex items-center gap-1">
-            <span className="mr-1 hidden sm:inline">
-              Request {index + 1} of {sessionRuns.length} in this session
-            </span>
-            <NavButton to={prev && `/runs/${prev.id}`} label="Previous request">
-              <ChevronLeft className="size-4" />
-            </NavButton>
-            <NavButton to={next && `/runs/${next.id}`} label="Next request">
-              <ChevronRight className="size-4" />
-            </NavButton>
-          </div>
-        )}
-      </div>
-      <div>
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-          <h1 className={cx("line-clamp-2 font-display text-xl leading-snug font-bold tracking-tight text-balance sm:text-2xl", run.metadata?.systemTurn && "text-zinc-500 italic")} title={run.name ?? undefined}>
-            {run.name ?? "Untitled run"}
-          </h1>
-          <StatusPill status={run.status} errorCount={run.errorCount} />
-        </div>
-        <div className="mt-1.5 flex flex-wrap gap-x-3 text-sm text-zinc-500 dark:text-zinc-400">
-          <span>{harnessLabel(run.harness)}</span>
-          {run.model && <span>{run.model}</span>}
-          <span>{dateTime(run.startedAt)}</span>
-          {session?.title && <span className="truncate">Session: {session.title}</span>}
-          {session?.gitBranch && session.gitBranch !== "HEAD" && <span>on {session.gitBranch}</span>}
-        </div>
-      </div>
-      <div className="flex flex-wrap items-center gap-1.5 text-xs" title="The run in one line: tools used in order, repeats grouped">
-        {parts.map((part, i) => (
-          <span key={i} className="inline-flex items-center gap-1.5">
-            {i > 0 && <ChevronRight className="size-3 text-zinc-400" />}
-            <span
-              className={cx(
-                "rounded-md px-2 py-0.5 font-medium",
-                part.kind === "end"
-                  ? part.status === "error"
-                    ? "bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-400"
-                    : part.status === "running"
-                      ? "bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-400"
-                      : "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400"
-                  : part.kind === "agent"
-                    ? "bg-teal-50 text-teal-700 dark:bg-teal-500/10 dark:text-teal-300"
-                    : "bg-white text-zinc-700 ring-1 ring-zinc-200 dark:bg-white/[0.06] dark:text-zinc-300 dark:ring-white/10",
-              )}
-            >
-              {part.label}
-              {part.count > 1 && ` ×${part.count}`}
-              {part.failed > 0 && <span className="text-rose-600 dark:text-rose-400"> ({part.failed} failed)</span>}
-            </span>
-          </span>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function NavButton({ to, label, children }: { to?: string; label: string; children: ReactNode }) {
-  if (!to) return <span className="rounded-md p-1 opacity-30">{children}</span>;
-  return (
-    <Link to={to} title={label} className="rounded-lg p-1.5 transition-colors hover:bg-zinc-900/5 hover:text-zinc-900 dark:hover:bg-white/10 dark:hover:text-white">
-      {children}
-    </Link>
-  );
-}
-
-function Expandable({ text, lines = 6 }: { text: string; lines?: number }) {
+/** `end` sits right after the last line of text, or beside "Show all" while the text is cut. */
+export function Expandable({ text, lines = 6, end }: { text: string; lines?: number; end?: ReactNode }) {
   const [open, setOpen] = useState(false);
   const long = text.split("\n").length > lines || text.length > lines * 120;
+  const clipped = long && !open;
   return (
     <div>
-      <div className={cx(!open && long && "max-h-40 overflow-hidden [mask-image:linear-gradient(to_bottom,black_60%,transparent)]")}>
+      <div
+        className={cx(
+          clipped && "max-h-40 overflow-hidden [mask-image:linear-gradient(to_bottom,black_60%,transparent)]",
+          !!end && !clipped && "[&>.prose-lucid]:inline [&>.prose-lucid>:last-child]:inline",
+        )}
+      >
         <Prose text={text} />
+        {end && !clipped && <span className="ml-1">{end}</span>}
       </div>
       {long && (
-        <button type="button" onClick={() => setOpen(!open)} className="mt-1.5 inline-flex items-center gap-1 text-xs font-medium text-zinc-600 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-white">
-          {open ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
-          {open ? "Show less" : "Show all"}
-        </button>
+        <div className="mt-1.5 flex items-center gap-2">
+          <button type="button" onClick={() => setOpen(!open)} className="inline-flex items-center gap-1 text-xs font-medium text-zinc-600 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-white">
+            {open ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
+            {open ? "Show less" : "Show all"}
+          </button>
+          {clipped && end}
+        </div>
       )}
     </div>
   );
 }
 
-function RequestAndAnswer({ data }: { data: RunDetail }) {
-  const { run } = data;
-  return (
-    <Card className="divide-y divide-zinc-100 dark:divide-white/[0.06]">
-      <div className="p-5">
-        <Section title="Request" hint="What the agent was asked, verbatim">
-          {run.input ? <Expandable text={run.input} /> : <p className="text-sm text-zinc-500">The request wasn't captured.</p>}
-        </Section>
-      </div>
-      <div className="p-5">
-        <Section title="Answer" hint="The agent's final reply">
-          {run.output ? (
-            <Expandable text={run.output} />
-          ) : (
-            <p className="text-sm text-zinc-500">{run.status === "running" ? "Still working…" : "No final answer was captured."}</p>
-          )}
-        </Section>
-      </div>
-    </Card>
-  );
-}
-
-function Timeline({ nodes, selected, onSelect, depth = 0 }: { nodes: Node[]; selected: string | null; onSelect: (id: string) => void; depth?: number }) {
+export function Timeline({ nodes, selected, onSelect, depth = 0 }: { nodes: Node[]; selected: string | null; onSelect: (id: string) => void; depth?: number }) {
   const rows = toRows(toTurns(nodes));
   if (rows.length === 0) return <p className="text-sm text-zinc-500">No steps captured yet.</p>;
   return (
@@ -235,9 +60,12 @@ function chosenLabel(turn: Turn) {
   const tools = [...new Set(turn.actions.filter((a) => a.step.kind === "tool" || a.step.kind === "agent").map((a) => (a.step.kind === "agent" ? "a sub-agent" : toolLabel(a.step.toolName ?? a.step.name))))];
   if (tools.length) return `Decided to use ${tools.join(", ")}`;
   if (turn.llm?.status === "error") return "Model call failed";
-  if (turn.llm?.outputPreview) return "Answered";
+  if (turn.llm?.outputPreview) return "Wrote the answer";
   return "Thought";
 }
+
+/** What the model said on a call, when it said more than which tools it called. */
+const saidOn = (step: Step) => (step.outputPreview && !step.outputPreview.startsWith("Calls ") ? step.outputPreview : null);
 
 function StepButton({ step, selected, onSelect, children, meta }: { step: Step; selected: boolean; onSelect: (id: string) => void; children: ReactNode; meta?: ReactNode }) {
   return (
@@ -256,7 +84,14 @@ function StepButton({ step, selected, onSelect, children, meta }: { step: Step; 
   );
 }
 
+/**
+ * One model call, what it said, then the actions it took: the agent's words
+ * and steps in the order they happened. The last call's words are the answer,
+ * shown under the workings, so they aren't repeated here (except in a
+ * sub-agent, whose answer goes to its parent).
+ */
 function TurnRows({ turn, selected, onSelect, depth }: { turn: Turn; selected: string | null; onSelect: (id: string) => void; depth: number }) {
+  const said = turn.llm ? saidOn(turn.llm) : null;
   return (
     <li>
       {turn.llm && (
@@ -273,10 +108,12 @@ function TurnRows({ turn, selected, onSelect, depth }: { turn: Turn; selected: s
           }
         >
           <span className="font-medium">{chosenLabel(turn)}</span>
-          {turn.llm.outputPreview && !turn.llm.outputPreview.startsWith("Calls ") && (
-            <span className="ml-2 text-zinc-500 dark:text-zinc-400">{turn.llm.outputPreview}</span>
-          )}
         </StepButton>
+      )}
+      {said && (turn.actions.length > 0 || depth > 0) && (
+        <p className="mb-1 ml-9 line-clamp-3 text-[13px] leading-relaxed text-zinc-600 dark:text-zinc-300" title={said}>
+          {said}
+        </p>
       )}
       {turn.actions.length > 0 && (
         <ol className={cx("space-y-0.5", turn.llm && "ml-4 border-l border-zinc-200 pl-2 dark:border-white/10")}>
@@ -385,7 +222,7 @@ const parse = (text: string | undefined) => {
 
 const pretty = (value: unknown) => (typeof value === "string" ? value : JSON.stringify(value, null, 2));
 
-function StepDetail({ step, steps, onClose }: { step: Step; steps: Step[]; onClose: () => void }) {
+export function StepDetail({ step, steps, onClose }: { step: Step; steps: Step[]; onClose: () => void }) {
   return (
     <Card className="divide-y divide-zinc-100 dark:divide-white/[0.06]">
       <div className="flex items-start gap-3.5 p-5">

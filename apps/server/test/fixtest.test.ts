@@ -9,7 +9,7 @@ import { ensureDefaultProject } from "../src/keys";
 import { LiveHub } from "../src/live";
 
 type FixTest = { status: string; lesson: string; revisedFrom?: string | null; results?: { pass: boolean; reason: string; decision: string }[]; standIn?: string | null; reason?: string };
-type Issue = { id: string; runs: number; toolName: string | null; fixTest: FixTest | null };
+type Issue = { id: string; runs: number; toolName: string | null; fixTest: FixTest | null; lesson: { text: string; status: string } | null };
 
 const TOOLS = [
   { type: "function", function: { name: "execute_code", description: "Run Python", parameters: { type: "object", properties: { code: { type: "string" } } } } },
@@ -99,9 +99,9 @@ async function setup(chat: ChatClient | undefined) {
       ],
     });
   const issue = async () => ((await call("GET", "/api/issues")).body.issues as Issue[]).find((i) => i.toolName === "execute_code")!;
-  /** Starts a test and waits for its result. */
-  const test = async (id: string, text: string) => {
-    expect((await call("POST", `/api/issues/${id}/test`, { text })).body).toMatchObject({ fixTest: { status: "running", lesson: text } });
+  /** Starts a test (Test & Apply with apply) and waits for its result. */
+  const test = async (id: string, text: string, apply = false) => {
+    expect((await call("POST", `/api/issues/${id}/test`, { text, apply })).body).toMatchObject({ fixTest: { status: "running", lesson: text } });
     for (let i = 0; i < 100; i++) {
       const fixTest = (await issue()).fixTest!;
       if (fixTest.status !== "running") return fixTest;
@@ -156,6 +156,43 @@ describe("testing a fix before it reaches the agent", () => {
     expect(asked.filter((r) => String(r.messages[0]?.content).startsWith("You improve"))).toHaveLength(1);
     expect((await call("POST", `/api/issues/${id}/lesson`, { text: "Be careful with code." })).status).toBe(409);
     expect((await call("POST", `/api/issues/${id}/lesson`, { text: result.lesson })).status).toBe(201);
+  });
+
+  it("Test & Apply applies the owner's words when they pass, and leaves a rewrite for them to read", async () => {
+    const { blockedTurn, issue, test } = await setup(fakeModel([]));
+    await blockedTurn("t1", Date.now() / 1000 - 600);
+    await blockedTurn("t2", Date.now() / 1000 - 300);
+    const { id } = await issue();
+    const lessonOf = async () => {
+      for (let i = 0; i < 50; i++) {
+        const { lesson } = await issue();
+        if (lesson) return lesson;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      return null;
+    };
+
+    // A rewrite passed, but the owner hasn't seen its words: nothing reaches the agent.
+    expect(await test(id, "Be careful with code.", true)).toMatchObject({ status: "passed", revisedFrom: "Be careful with code." });
+    expect(await lessonOf()).toBeNull();
+
+    const fix = "When running as a cron job, use the terminal tool, never execute_code.";
+    expect(await test(id, fix, true)).toMatchObject({ status: "passed", lesson: fix, revisedFrom: null });
+    expect(await lessonOf()).toMatchObject({ text: fix, status: "active" });
+  });
+
+  it("Test & Apply leaves a failed fix out of the agent", async () => {
+    const stubborn: ChatClient = async (request) => {
+      if (String(request.messages[0]?.content).startsWith("You improve")) return { text: '{"lesson": "Please be even more careful."}', latencyMs: 1 };
+      if (request.json) return { text: '{"pass": false, "reason": "It still ran execute_code."}', latencyMs: 1 };
+      return { toolCalls: [{ name: "execute_code", input: {} }], latencyMs: 1 };
+    };
+    const { blockedTurn, issue, test } = await setup(stubborn);
+    await blockedTurn("t1", Date.now() / 1000 - 600);
+    await blockedTurn("t2", Date.now() / 1000 - 300);
+    expect(await test((await issue()).id, "Be careful.", true)).toMatchObject({ status: "failed" });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect((await issue()).lesson).toBeNull();
   });
 
   it("fails when the rewrite doesn't help either", async () => {

@@ -27,8 +27,10 @@ import {
 } from "lucide-react";
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link } from "react-router";
+import { AsciiPicture } from "../ascii";
 import { GITHUB_REPO, GITHUB_URL, GridGlow, Logo, TraceLine, Underline, useDarkDocument } from "../brand";
 import { cx } from "../ui";
+import agents from "./agents.webp";
 import { useClock } from "./clock";
 import { HeroDemo } from "./HeroDemo";
 import { AGENTS, BRANDS, type Brand, BrandMark, PROVIDERS } from "./logos";
@@ -78,8 +80,11 @@ function useGitHubStars() {
     retry: false,
     refetchOnWindowFocus: false,
   });
-  return query.data ?? null;
+  // "0 stars" reads as "nobody uses it": the count shows once there's a few.
+  return query.data != null && query.data >= SHOW_STARS_FROM ? query.data : null;
 }
+
+const SHOW_STARS_FROM = 10;
 
 const formatStars = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}k` : String(n));
 
@@ -187,7 +192,9 @@ const ROTATION: { brand?: Brand; name: string }[] = [
 /**
  * The agent in the headline, cycling. The names share one grid cell and the
  * chip takes the width of the one showing, measured again when fonts load or
- * the breakpoint changes the size.
+ * the breakpoint changes the size. The column is held to the chip's width:
+ * left to size itself it takes the longest name, and the one showing is then
+ * centred in that, off to the right, and cut off.
  */
 function AgentChip() {
   const active = Math.floor(useClock(200, 0) / 2.4) % ROTATION.length;
@@ -206,7 +213,7 @@ function AgentChip() {
   return (
     <span
       style={{ width }}
-      className="inline-grid translate-y-[0.04em] place-items-center overflow-hidden rounded-[0.28em] bg-white/[0.07] pb-[0.06em] align-baseline ring-1 ring-white/15 transition-[width] duration-500 ease-out motion-reduce:transition-none"
+      className="inline-grid translate-y-[0.04em] grid-cols-[minmax(0,1fr)] place-items-center overflow-hidden rounded-[0.28em] bg-white/[0.07] pb-[0.06em] align-baseline ring-1 ring-white/15 transition-[width] duration-500 ease-out motion-reduce:transition-none"
     >
       {ROTATION.map((item, i) => (
         <span
@@ -270,6 +277,7 @@ function Hero({ stars }: { stars: number | null }) {
             </li>
           ))}
         </ul>
+        <AgentLineup />
         <LogoWall />
       </div>
       <div className="relative mx-auto max-w-6xl px-4 pt-16 pb-24 sm:px-6">
@@ -289,11 +297,24 @@ function Backdrop() {
   );
 }
 
+/**
+ * The agents people know by their faces, through Lucid's ASCII filter at low
+ * power. On paper, like the app: half of them are black and would vanish into
+ * this page.
+ */
+function AgentLineup() {
+  return (
+    <div className="mx-auto mt-16 max-w-4xl rounded-[1.75rem] bg-paper px-4 pt-5 pb-4 ring-1 ring-white/10 sm:px-10 sm:pt-10 sm:pb-8">
+      <AsciiPicture src={agents} ratio={859 / 255} alt="The avatars of popular AI agents" />
+    </div>
+  );
+}
+
 function LogoWall() {
   return (
     <div className="mx-auto mt-16 max-w-3xl">
       <p className="text-sm text-zinc-400">Plugs into the agents and models you already use</p>
-      <LogoRow label="Agents and frameworks" brands={AGENTS} />
+      <LogoRow label="Works with" brands={AGENTS} />
       <LogoRow label="Model providers" brands={PROVIDERS} />
       <p className="mt-6 text-xs text-zinc-500">…and anything that speaks OpenTelemetry or an OpenAI-style API.</p>
     </div>

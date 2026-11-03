@@ -1,10 +1,12 @@
 // Dashboard API. Shapes are made for the screens, not generic: the Runs list
 // gets exactly the columns it shows, the Run page gets the run and its steps.
 
-import { and, asc, count, desc, eq, gte, ilike, isNotNull, isNull, lt, max, or, sql, sum } from "drizzle-orm";
+import { modelContextWindow } from "@lucid/pricing";
+import { and, asc, count, desc, eq, gte, ilike, inArray, isNotNull, isNull, lt, max, or, sql, sum } from "drizzle-orm";
 import { Hono, type MiddlewareHandler } from "hono";
 import { streamSSE } from "hono/streaming";
 import type { AppContext, AppEnv } from "../context";
+import { type CallInput, contextBreakdown } from "../contextBreakdown";
 import { schema } from "../db";
 import { CLOSED, resolveAccount } from "../auth";
 import { arenaRoutes } from "../ee/arena/routes";
@@ -14,7 +16,7 @@ import { createReviewer } from "../review";
 import { errorSignature, hintFor } from "../insights";
 import { LESSON_HARNESSES, applyLesson, cleanLesson, lessonsForIssues, runsSince, setLessonStatus } from "../lessons";
 import { publicEndpoint } from "../install";
-import { costSplit } from "../pricing";
+import { costSplit, pricingCatalog } from "../pricing";
 import { createApiKey } from "../keys";
 import { batchFor } from "../normalizers";
 import { upstreams } from "../proxy";
@@ -27,6 +29,19 @@ const UNTESTED = "Test this fix first: Lucid applies a fix only after it passes 
 const STATUSES = new Set(["ok", "error", "running"]);
 /** The Spend view's periods, in days. */
 const USAGE_DAYS = new Set([1, 7, 30]);
+/** A run's context breakdown reads every call's messages; past this many calls the rest go unsplit. */
+const CONTEXT_MAX_CALLS = 500;
+
+const tokensIn = (step: { inputTokens: number | null; cacheReadTokens: number | null; cacheWriteTokens: number | null }) =>
+  (step.inputTokens ?? 0) + (step.cacheReadTokens ?? 0) + (step.cacheWriteTokens ?? 0);
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
+const parseJson = (text: string): unknown => {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+};
 
 const runListColumns = {
   id: runs.id,
@@ -242,7 +257,67 @@ export function apiRoutes(ctx: AppContext) {
           .where(eq(runs.sessionId, run.sessionId))
           .orderBy(sql`${runs.startedAt} asc nulls last`)
       : [];
-    return c.json({ run, session: session ?? null, steps: stepRows, sessionRuns: siblings, costSplit: costSplit(stepRows.filter((step) => step.kind === "llm")) });
+    const llmSteps = stepRows.filter((step) => step.kind === "llm");
+    // The biggest prompt of the run, against the most its model can take.
+    const biggest = llmSteps.reduce<(typeof llmSteps)[number] | null>((best, step) => (!best || tokensIn(step) > tokensIn(best) ? step : best), null);
+    const contextWindow = biggest ? modelContextWindow(pricingCatalog(), biggest.provider, biggest.model) : null;
+    return c.json({ run, session: session ?? null, steps: stepRows, sessionRuns: siblings, costSplit: costSplit(llmSteps), contextWindow });
+  });
+
+  /** What the run's model calls read, by where it came from (see contextBreakdown.ts). Loaded on a click: it reads every call's messages. */
+  app.get("/runs/:id/context", async (c) => {
+    const projectId = c.get("projectId");
+    const [run] = await db
+      .select({ id: runs.id, input: runs.input })
+      .from(runs)
+      .where(and(eq(runs.projectId, projectId), eq(runs.id, c.req.param("id"))));
+    if (!run) return c.json({ error: "Run not found" }, 404);
+    const stepRows = await db
+      .select({
+        externalId: steps.externalId,
+        parentExternalId: steps.parentExternalId,
+        kind: steps.kind,
+        inputHash: steps.inputHash,
+        attrs: steps.attrs,
+        inputTokens: steps.inputTokens,
+        cacheReadTokens: steps.cacheReadTokens,
+        cacheWriteTokens: steps.cacheWriteTokens,
+      })
+      .from(steps)
+      .where(eq(steps.runId, run.id))
+      .orderBy(sql`${steps.startedAt} asc nulls last`, asc(steps.seq), asc(steps.createdAt));
+    const byId = new Map(stepRows.map((step) => [step.externalId, step]));
+    const inSubAgent = (step: (typeof stepRows)[number]) => {
+      const seen = new Set<string>();
+      for (let parent = step.parentExternalId; parent && !seen.has(parent); parent = byId.get(parent)?.parentExternalId ?? null) {
+        seen.add(parent);
+        if (byId.get(parent)?.kind === "agent") return true;
+      }
+      return false;
+    };
+    const llmSteps = stepRows.filter((step) => step.kind === "llm").slice(0, CONTEXT_MAX_CALLS);
+    const load = async (keys: string[]) => {
+      if (!keys.length) return new Map<string, unknown>();
+      const rows = await db
+        .select({ hash: blobs.hash, content: blobs.content })
+        .from(blobs)
+        .where(and(eq(blobs.projectId, projectId), inArray(blobs.hash, keys)));
+      return new Map(rows.map((row) => [row.hash, parseJson(row.content)]));
+    };
+    // Tool sets repeat across calls; messages are big, so they're read a few calls at a time.
+    const tools = await load([...new Set(llmSteps.map((step) => step.attrs?.toolsRef).filter((key): key is string => !!key))]);
+    const calls: CallInput[] = [];
+    for (let i = 0; i < llmSteps.length; i += 20) {
+      const chunk = llmSteps.slice(i, i + 20);
+      const inputs = await load(chunk.map((step) => step.inputHash).filter((key): key is string => !!key));
+      for (const step of chunk) {
+        const input = step.inputHash ? inputs.get(step.inputHash) : undefined;
+        const messages = Array.isArray(input) ? input : isRecord(input) && Array.isArray(input.messages) ? input.messages : null;
+        const toolList = step.attrs?.toolsRef ? tools.get(step.attrs.toolsRef) : undefined;
+        calls.push({ stepId: step.externalId, messages, tools: Array.isArray(toolList) ? toolList : null, inSubAgent: inSubAgent(step), inputTokens: step.inputTokens, cacheReadTokens: step.cacheReadTokens, cacheWriteTokens: step.cacheWriteTokens });
+      }
+    }
+    return c.json(contextBreakdown(calls, run.input));
   });
 
   /** Failed steps grouped by what failed and how, most runs first, with the rule-based hint. */
@@ -344,10 +419,18 @@ export function apiRoutes(ctx: AppContext) {
     if (!(c.req.header("content-type") ?? "").includes("application/json")) return c.json({ error: "Send JSON" }, 415);
     if (!tester.enabled) return c.json({ error: "Testing a fix needs a model key: set BASETEN_API_KEY for the Lucid server." }, 409);
     const projectId = c.get("projectId");
-    const text = cleanLesson(((await c.req.json().catch(() => ({}))) as { text?: unknown }).text);
+    const body = (await c.req.json().catch(() => ({}))) as { text?: unknown; apply?: unknown };
+    const text = cleanLesson(body.text);
     if (!text) return c.json({ error: "Write the fix first." }, 400);
     const issue = (await allIssues(projectId)).find((candidate) => candidate.id === c.req.param("id"));
     if (!issue) return c.json({ error: "That problem isn't in the Inbox anymore." }, 404);
+    // Test & apply: a pass of the owner's own words goes to the agent at once. A rewrite waits for them to read it.
+    const onPass =
+      body.apply === true && LESSON_HARNESSES.has(issue.harness)
+        ? async ({ revisedFrom }: { revisedFrom: string | null }) => {
+            if (revisedFrom === null) await applyLesson(db, projectId, { issueId: issue.id, harness: issue.harness, text });
+          }
+        : undefined;
     // The judge needs to know the mistake: the model's diagnosis when there is one.
     const [diagnosis] = await db
       .select({ title: issueExplanations.title, why: issueExplanations.why })
@@ -356,7 +439,7 @@ export function apiRoutes(ctx: AppContext) {
     const about = diagnosis?.title && diagnosis.why ? diagnosis : issue;
     const problem = [`${about.title}. ${about.why}`, issue.toolName && `The failing step: ${issue.toolName}.`, issue.sample && `The error: ${issue.sample.slice(0, 500)}`].filter(Boolean).join("\n");
     const decisions = issue.problem === "error" ? await failingDecisions(ctx, projectId, issue) : issue.decisions;
-    return c.json({ fixTest: await tester.start(projectId, { issueId: issue.id, problem, decisions }, text) });
+    return c.json({ fixTest: await tester.start(projectId, { issueId: issue.id, problem, decisions }, text, onPass) });
   });
 
   // Ignore: out of the Inbox and its badge, and never diagnosed by itself. Restore brings it back.
@@ -460,24 +543,134 @@ export function apiRoutes(ctx: AppContext) {
     return c.text(row.content);
   });
 
+  /**
+   * The Runs tab: conversations, newest first. A session's requests are one
+   * row; a request that came without a session is a row of its own ("run:<id>").
+   * Filters match a conversation when any of its requests matches.
+   */
   app.get("/sessions", async (c) => {
+    const projectId = c.get("projectId");
+    const status = c.req.query("status");
+    const harness = c.req.query("harness");
+    const q = c.req.query("q")?.trim();
+    const before = c.req.query("before");
+    const limit = Math.min(Number(c.req.query("limit")) || 50, 200);
+    const key = sql<string>`coalesce(${runs.sessionId}, 'run:' || ${runs.id})`;
+    const lastStarted = sql<Date | null>`max(${runs.startedAt})`.mapWith(runs.startedAt);
+    const filters = [eq(runs.projectId, projectId)];
+    if (harness) filters.push(eq(runs.harness, harness));
+    if (q) {
+      const like = `%${q.replace(/[%_\\]/g, "\\$&")}%`;
+      filters.push(sql`${key} in (
+        select coalesce(r.session_id, 'run:' || r.id) from runs r
+        left join sessions s on s.id = r.session_id
+        where r.project_id = ${projectId} and (r.name ilike ${like} or r.input ilike ${like} or r.output ilike ${like} or s.title ilike ${like})
+      )`);
+    }
+    const having = [];
+    if (status === "error") having.push(sql`count(*) filter (where ${runs.status} = 'error' or ${runs.errorCount} > 0) > 0`);
+    else if (status === "running") having.push(sql`bool_or(${runs.status} = 'running')`);
+    if (before) having.push(sql`${lastStarted} < ${new Date(before)}`);
     const rows = await db
       .select({
-        id: sessions.id,
-        title: sessions.title,
-        harness: sessions.harness,
-        cwd: sessions.cwd,
-        gitBranch: sessions.gitBranch,
-        startedAt: sessions.startedAt,
-        lastEventAt: sessions.lastEventAt,
-        runs: sql<number>`(select count(*) from ${runs} where ${runs.sessionId} = ${sessions.id})::int`,
-        costUsd: sql<number | null>`(select sum(${runs.costUsd}) from ${runs} where ${runs.sessionId} = ${sessions.id})`,
+        id: key,
+        sessionId: sql<string | null>`min(${runs.sessionId})`,
+        harness: sql<string>`min(${runs.harness})`,
+        model: sql<string | null>`(array_agg(${runs.model} order by ${runs.startedAt} desc nulls last))[1]`,
+        firstRequest: sql<string | null>`(array_agg(${runs.name} order by ${runs.startedAt} asc nulls last))[1]`,
+        lastRequest: sql<string | null>`(array_agg(${runs.name} order by ${runs.startedAt} desc nulls last))[1]`,
+        startedAt: sql<Date | null>`min(${runs.startedAt})`.mapWith(runs.startedAt),
+        lastStartedAt: lastStarted,
+        endedAt: sql<Date | null>`max(coalesce(${runs.endedAt}, ${runs.startedAt}))`.mapWith(runs.startedAt),
+        requests: sql<number>`count(*)::int`,
+        running: sql<number>`(count(*) filter (where ${runs.status} = 'running'))::int`,
+        failed: sql<number>`(count(*) filter (where ${runs.status} = 'error'))::int`,
+        errorCount: sql<number>`coalesce(sum(${runs.errorCount}), 0)::int`,
+        costUsd: sum(runs.costUsd).mapWith(Number),
+        costIncomplete: sql<number>`coalesce(sum(${runs.costIncomplete}), 0)::int`,
+        inputTokens: sum(runs.inputTokens).mapWith(Number),
+        outputTokens: sum(runs.outputTokens).mapWith(Number),
+        cacheReadTokens: sum(runs.cacheReadTokens).mapWith(Number),
+        cacheWriteTokens: sum(runs.cacheWriteTokens).mapWith(Number),
+        llmCallCount: sql<number>`coalesce(sum(${runs.llmCallCount}), 0)::int`,
+        toolCallCount: sql<number>`coalesce(sum(${runs.toolCallCount}), 0)::int`,
       })
-      .from(sessions)
-      .where(eq(sessions.projectId, c.get("projectId")))
-      .orderBy(sql`${sessions.lastEventAt} desc nulls last`)
-      .limit(100);
-    return c.json({ sessions: rows });
+      .from(runs)
+      .where(and(...filters))
+      .groupBy(key)
+      .having(having.length ? and(...having) : undefined)
+      .orderBy(sql`${lastStarted} desc nulls last`, desc(key))
+      .limit(limit + 1);
+    const page = rows.slice(0, limit);
+    const ids = page.map((row) => row.sessionId).filter((id): id is string => !!id);
+    const details = ids.length
+      ? await db.select({ id: sessions.id, title: sessions.title, gitBranch: sessions.gitBranch }).from(sessions).where(inArray(sessions.id, ids))
+      : [];
+    const byId = new Map(details.map((row) => [row.id, row]));
+    const last = page[page.length - 1]?.lastStartedAt;
+    return c.json({
+      sessions: page.map((row) => ({ ...row, title: (row.sessionId && byId.get(row.sessionId)?.title) || null, gitBranch: (row.sessionId && byId.get(row.sessionId)?.gitBranch) || null })),
+      nextBefore: rows.length > limit && last ? last.toISOString() : null,
+    });
+  });
+
+  /**
+   * One conversation, oldest request first: every request and answer, each
+   * request's biggest prompt (the context the session has grown to), and the
+   * cost split. Steps load per request, when its workings are opened.
+   * `run:<id>` opens the session that run belongs to, or that run alone.
+   */
+  app.get("/sessions/:key", async (c) => {
+    const projectId = c.get("projectId");
+    const key = c.req.param("key");
+    let sessionId: string | null = key;
+    let soloRun: string | null = null;
+    if (key.startsWith("run:")) {
+      const [run] = await db
+        .select({ id: runs.id, sessionId: runs.sessionId })
+        .from(runs)
+        .where(and(eq(runs.projectId, projectId), eq(runs.id, key.slice(4))));
+      if (!run) return c.json({ error: "Run not found" }, 404);
+      sessionId = run.sessionId;
+      if (!sessionId) soloRun = run.id;
+    }
+    const [session] = sessionId ? await db.select().from(sessions).where(and(eq(sessions.projectId, projectId), eq(sessions.id, sessionId))) : [];
+    if (sessionId && !session) return c.json({ error: "Session not found" }, 404);
+    const rows = await db
+      .select({ ...runListColumns, input: runs.input, output: runs.output })
+      .from(runs)
+      .leftJoin(sessions, eq(sessions.id, runs.sessionId))
+      .where(and(eq(runs.projectId, projectId), sessionId ? eq(runs.sessionId, sessionId) : eq(runs.id, soloRun!)))
+      .orderBy(sql`${runs.startedAt} asc nulls last`, asc(runs.id));
+    const ids = rows.map((row) => row.id);
+    const llm = and(eq(steps.projectId, projectId), inArray(steps.runId, ids.length ? ids : [""]), eq(steps.kind, "llm"));
+    const promptSize = sql<number>`coalesce(${steps.inputTokens}, 0) + coalesce(${steps.cacheReadTokens}, 0) + coalesce(${steps.cacheWriteTokens}, 0)`;
+    const contexts = await db
+      .select({ runId: steps.runId, context: sql<number>`max(${promptSize})::int` })
+      .from(steps)
+      .where(llm)
+      .groupBy(steps.runId);
+    const byModel = await db
+      .select({
+        model: steps.model,
+        provider: steps.provider,
+        inputTokens: sum(steps.inputTokens).mapWith(Number),
+        outputTokens: sum(steps.outputTokens).mapWith(Number),
+        cacheReadTokens: sum(steps.cacheReadTokens).mapWith(Number),
+        cacheWriteTokens: sum(steps.cacheWriteTokens).mapWith(Number),
+      })
+      .from(steps)
+      .where(llm)
+      .groupBy(steps.model, steps.provider);
+    const [biggest] = await db.select({ model: steps.model, provider: steps.provider }).from(steps).where(llm).orderBy(desc(promptSize)).limit(1);
+    const contextOf = new Map(contexts.map((row) => [row.runId, row.context]));
+    return c.json({
+      id: sessionId ?? `run:${soloRun}`,
+      session: session ?? null,
+      runs: rows.map((row) => ({ ...row, context: contextOf.get(row.id) ?? 0 })),
+      costSplit: costSplit(byModel),
+      contextWindow: biggest ? modelContextWindow(pricingCatalog(), biggest.provider, biggest.model) : null,
+    });
   });
 
   app.get("/syncs", async (c) => c.json({ syncs: await currentSyncs(db, c.get("projectId")) }));

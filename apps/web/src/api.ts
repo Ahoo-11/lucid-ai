@@ -75,6 +75,61 @@ export type RunDetail = {
   steps: Step[];
   sessionRuns: { id: string; name: string | null; startedAt: string | null; status: Status }[];
   costSplit: CostSplit | null;
+  /** The most tokens the model of the run's biggest call can take; null when its catalog entry is unknown. */
+  contextWindow: number | null;
+};
+
+/** A row of the Runs tab: one conversation, or a request that came without one (id "run:<run id>"). */
+export type SessionListItem = {
+  id: string;
+  sessionId: string | null;
+  title: string | null;
+  firstRequest: string | null;
+  lastRequest: string | null;
+  harness: string;
+  model: string | null;
+  gitBranch: string | null;
+  startedAt: string | null;
+  lastStartedAt: string | null;
+  endedAt: string | null;
+  requests: number;
+  running: number;
+  failed: number;
+  errorCount: number;
+  costUsd: number | null;
+  costIncomplete: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  llmCallCount: number;
+  toolCallCount: number;
+};
+
+/** A request in a session, with the biggest prompt any of its model calls sent. */
+export type SessionRun = RunListItem & { context: number };
+
+export type SessionView = {
+  id: string;
+  session: (Session & { startedAt: string | null; lastEventAt: string | null }) | null;
+  runs: SessionRun[];
+  costSplit: CostSplit | null;
+  contextWindow: number | null;
+};
+
+/** In prompt order: tool definitions, instructions, earlier conversation, the request, the work on it. */
+export type ContextPartKey = "tools" | "system" | "history" | "request" | "work";
+
+/** What a run's model calls read, by where it came from, fitted to the provider's token counts. */
+export type ContextBreakdown = {
+  calls: number;
+  uncaptured: number;
+  measured: boolean;
+  total: number;
+  newTokens: number;
+  wrote: number;
+  parts: { key: ContextPartKey; tokens: number; newTokens: number; items: { label: string; tokens: number }[]; cut: boolean }[];
+  perCall: { stepId: string; tokens: number; cached: number }[];
 };
 
 /** What each kind of token cost at list prices; null when no model involved has a known price. */
@@ -343,7 +398,11 @@ export const api = {
   },
   overview: () => request<Overview>("/overview"),
   runs: (params: URLSearchParams) => request<{ runs: RunListItem[]; nextBefore: string | null }>(`/runs?${params}`),
+  sessions: (params: URLSearchParams) => request<{ sessions: SessionListItem[]; nextBefore: string | null }>(`/sessions?${params}`),
+  /** A session id, or "run:<run id>" for the session that run is in. */
+  session: (key: string) => request<SessionView>(`/sessions/${encodeURIComponent(key)}`),
   run: (id: string) => request<RunDetail>(`/runs/${id}`),
+  runContext: (id: string) => request<ContextBreakdown>(`/runs/${id}/context`),
   usage: (days: number) => request<Usage>(`/usage?days=${days}`),
   issues: () => request<{ issues: Issue[]; diagnosisModel?: string | null; autoDiagnose: boolean }>("/issues"),
   /** Takes a problem out of the Inbox (or brings it back). */
@@ -352,8 +411,9 @@ export const api = {
   setAutoDiagnose: (on: boolean) => request<{ autoDiagnose: boolean }>(`/settings/auto-diagnose/${on ? "on" : "off"}`, { method: "POST", body: "{}" }),
   /** Asks the model to diagnose one problem; spends credits, so only on a click. */
   diagnose: (issueId: string) => request<{ diagnosis: Diagnosis }>(`/issues/${encodeURIComponent(issueId)}/diagnose`, { method: "POST", body: "{}" }),
-  /** Tests a fix on past runs where the problem happened; spends credits, so only on a click. */
-  testFix: (issueId: string, text: string) => request<{ fixTest: FixTest }>(`/issues/${encodeURIComponent(issueId)}/test`, { method: "POST", body: JSON.stringify({ text }) }),
+  /** Tests a fix on past runs where the problem happened; spends credits, so only on a click. With apply, a pass of these exact words is applied. */
+  testFix: (issueId: string, text: string, apply = false) =>
+    request<{ fixTest: FixTest }>(`/issues/${encodeURIComponent(issueId)}/test`, { method: "POST", body: JSON.stringify({ text, apply }) }),
   /** Approves a lesson (as written here) for the problem's agent, from its next turn. */
   applyLesson: (issueId: string, text: string) =>
     request<{ lesson: AppliedLesson }>(`/issues/${encodeURIComponent(issueId)}/lesson`, { method: "POST", body: JSON.stringify({ text }) }),

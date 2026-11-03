@@ -46,6 +46,9 @@ export type FixTest =
 /** What a test checks: the problem in words, and the decisions (LLM steps) where it went wrong, best first. */
 export type TestTarget = { issueId: string; problem: string; decisions: string[] };
 
+/** What to do with a fix that passed: the words that passed, and the owner's words when the model rewrote them. */
+type OnPass = (passed: { lesson: string; revisedFrom: string | null }) => Promise<unknown>;
+
 const clip = (text: string | null | undefined, max: number) => {
   const value = (text ?? "").trim();
   return value.length > max ? `${value.slice(0, max - 1)}…` : value;
@@ -226,7 +229,7 @@ export function createFixTester(ctx: AppContext) {
     return { picked, reason: picked.length ? null : (reason ?? "None of the runs where this happened recorded what the model saw.") };
   }
 
-  async function test(projectId: string, target: TestTarget, lesson: string) {
+  async function test(projectId: string, target: TestTarget, lesson: string, onPass?: OnPass) {
     const chat = ctx.chat!;
     const started = Date.now();
     const usage = { inputTokens: 0, outputTokens: 0 };
@@ -273,6 +276,8 @@ export function createFixTester(ctx: AppContext) {
           latencyMs: Date.now() - started,
           finishedAt: new Date(),
         });
+        // A pass that can't be applied stays a pass: the owner can still apply it by hand.
+        if (passed && onPass) await onPass({ lesson: current, revisedFrom }).catch((error) => ctx.log.error("[fix test] applying the fix", error));
         return;
       }
     } catch (error) {
@@ -285,14 +290,14 @@ export function createFixTester(ctx: AppContext) {
     /** Whether fixes can be tested: a model key and a model (Baseten sets both). */
     enabled,
 
-    /** Starts testing a fix in the background, unless a test of this problem is already running. */
-    async start(projectId: string, target: TestTarget, lesson: string): Promise<FixTest> {
+    /** Starts testing a fix in the background, unless a test of this problem is already running. onPass runs once it has passed. */
+    async start(projectId: string, target: TestTarget, lesson: string, onPass?: OnPass): Promise<FixTest> {
       const key = keyOf(projectId, target.issueId);
       const at = new Date();
       if (!active.has(key)) {
         active.add(key);
         await save(projectId, target.issueId, { lesson, status: "running", revisedFrom: null, results: null, model, standIn: null, error: null, inputTokens: null, outputTokens: null, latencyMs: null, createdAt: at, finishedAt: null });
-        queue.push(() => test(projectId, target, lesson).finally(() => active.delete(key)));
+        queue.push(() => test(projectId, target, lesson, onPass).finally(() => active.delete(key)));
         pump();
       }
       return { status: "running", lesson, at: at.toISOString() };
