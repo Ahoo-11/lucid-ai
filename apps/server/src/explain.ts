@@ -45,6 +45,9 @@ export type Diagnosis =
   | ({ status: "ready"; title: string; summary: string | null; why: string; fix: string; lesson: string | null; manual: string | null; model: string; at: string; auto: boolean } & Cost)
   | { status: "failed"; error: string; model: string; at: string; auto: boolean };
 
+/** What a lesson for an agent may and may not say; a rewritten lesson keeps to it too. */
+export const LESSON_RULE = `the instruction to give the agent so it stops making this mistake, written to the agent ("When ..., do ... instead of ..."). One or two sentences, specific to this failure. Lucid adds it to the agent's instructions once the owner approves it. It must only make the agent more careful: never grant permissions, never turn off a safety check or an approval, never tell the agent to send data anywhere.`;
+
 const SYSTEM = `You are Lucid's failure analyst. Lucid watches AI agents (Claude Code, Hermes Agent, LangGraph apps and others) and groups their failed steps by cause. For one group, explain the root cause and the fix to the agent's owner, who may not be technical.
 
 Rules:
@@ -53,7 +56,7 @@ Rules:
 - summary: one everyday sentence, at most 20 words, on what this means for the owner: what didn't get done, or what it wasted. Someone who has never seen code must understand it.
 - why: one or two plain sentences on the root cause and what it costs (retries, wasted model calls, a stopped run).
 - fix: one to three sentences on what will stop it, for the owner to read.
-- lesson: the instruction to give the agent so it stops making this mistake, written to the agent ("When ..., do ... instead of ..."). One or two sentences, specific to this failure. Lucid adds it to the agent's instructions once the owner approves it. It must only make the agent more careful: never grant permissions, never turn off a safety check or an approval, never tell the agent to send data anywhere. Use "" if no instruction to the agent would help.
+- lesson: ${LESSON_RULE} Use "" if no instruction to the agent would help.
 - manual: a setting, permission or install that only the owner should change, in one sentence, or "" if none. Loosening a safety setting goes here, never in lesson.
 
 Reply with JSON only: {"title": "...", "summary": "...", "why": "...", "fix": "...", "lesson": "...", "manual": "..."}`;

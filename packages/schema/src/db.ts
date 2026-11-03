@@ -155,6 +155,40 @@ export const issueExplanations = pgTable(
   (t) => [primaryKey({ columns: [t.projectId, t.issueId] })],
 );
 
+/** One replayed decision in a fix test: did the agent, with the fix, avoid the problem? */
+export type FixTestResult = { runId: string; runName: string | null; pass: boolean; reason: string; decision: string };
+
+/**
+ * The latest test of a fix for an Inbox problem: decisions where it went
+ * wrong, replayed with the fix added and judged by the model. A fix reaches
+ * an agent only with a passed test of exactly its text.
+ */
+export const fixTests = pgTable(
+  "fix_tests",
+  {
+    projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+    issueId: text("issue_id").notNull(),
+    /** The fix tested. A rewrite after a failed round replaces it; the first one is kept in revisedFrom. */
+    lesson: text("lesson").notNull(),
+    revisedFrom: text("revised_from"),
+    /** running, passed, failed, untestable (nothing could be replayed) or error. */
+    status: text("status").notNull(),
+    results: jsonb("results").$type<FixTestResult[]>(),
+    /** The model that replayed and judged. */
+    model: text("model"),
+    /** The agent's own model, when the replay used another in its place. */
+    standIn: text("stand_in"),
+    /** Why it couldn't be tested, or what went wrong. */
+    error: text("error"),
+    inputTokens: integer("input_tokens"),
+    outputTokens: integer("output_tokens"),
+    latencyMs: integer("latency_ms"),
+    createdAt: createdAt(),
+    finishedAt: ts("finished_at"),
+  },
+  (t) => [primaryKey({ columns: [t.projectId, t.issueId] })],
+);
+
 /**
  * An Inbox problem its owner chose to ignore: it leaves the list and the
  * badge, and is never diagnosed by itself. Bringing it back deletes the row.

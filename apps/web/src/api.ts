@@ -145,7 +145,33 @@ export type Issue = {
   lesson: AppliedLesson | null;
   /** The owner took it out of the Inbox; it isn't diagnosed by itself. */
   ignored: boolean;
+  /** The latest test of a fix for it: a fix is applied only after its exact words pass. */
+  fixTest: FixTest | null;
 };
+
+/** One past decision replayed with the fix: did the agent avoid the problem? */
+export type FixTestResult = { runId: string; runName: string | null; pass: boolean; reason: string; decision: string };
+
+type TestedFix = {
+  /** The words tested: Muse Spark's rewrite when the first version failed (that one is in revisedFrom). */
+  lesson: string;
+  revisedFrom: string | null;
+  results: FixTestResult[];
+  model: string;
+  /** The agent's own model, when Muse Spark replayed in its place. */
+  standIn: string | null;
+  at: string;
+  inputTokens: number;
+  outputTokens: number;
+  latencyMs: number;
+};
+
+export type FixTest =
+  | { status: "running"; lesson: string; at: string }
+  | ({ status: "passed" } & TestedFix)
+  | ({ status: "failed" } & TestedFix)
+  | { status: "untestable"; lesson: string; reason: string; at: string }
+  | { status: "error"; lesson: string; reason: string; at: string };
 
 export type Diagnosis =
   | { status: "pending" }
@@ -322,6 +348,8 @@ export const api = {
   setAutoDiagnose: (on: boolean) => request<{ autoDiagnose: boolean }>(`/settings/auto-diagnose/${on ? "on" : "off"}`, { method: "POST", body: "{}" }),
   /** Asks the model to diagnose one problem; spends credits, so only on a click. */
   diagnose: (issueId: string) => request<{ diagnosis: Diagnosis }>(`/issues/${encodeURIComponent(issueId)}/diagnose`, { method: "POST", body: "{}" }),
+  /** Tests a fix on past runs where the problem happened; spends credits, so only on a click. */
+  testFix: (issueId: string, text: string) => request<{ fixTest: FixTest }>(`/issues/${encodeURIComponent(issueId)}/test`, { method: "POST", body: JSON.stringify({ text }) }),
   /** Approves a lesson (as written here) for the problem's agent, from its next turn. */
   applyLesson: (issueId: string, text: string) =>
     request<{ lesson: AppliedLesson }>(`/issues/${encodeURIComponent(issueId)}/lesson`, { method: "POST", body: JSON.stringify({ text }) }),

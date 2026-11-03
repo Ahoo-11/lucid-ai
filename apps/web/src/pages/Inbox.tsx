@@ -5,9 +5,11 @@ import {
   CheckCircle2,
   ChevronRight,
   CircleCheck,
+  CircleX,
   Copy,
   EyeOff,
   FileText,
+  FlaskConical,
   Globe,
   Info,
   Loader2,
@@ -21,7 +23,7 @@ import {
 } from "lucide-react";
 import { type ReactNode, useEffect, useState, useSyncExternalStore } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
-import { type AppliedLesson, type Diagnosis, type Issue, api } from "../api";
+import { type AppliedLesson, type Diagnosis, type FixTest, type Issue, api } from "../api";
 import { ago, harnessLabel, plural } from "../format";
 import { BRANDS, BrandMark } from "../landing/logos";
 import { CopyButton, Empty, cx } from "../ui";
@@ -107,9 +109,9 @@ export function Inbox() {
   const query = useQuery({
     queryKey: ["issues"],
     queryFn: api.issues,
-    // Soon again while a diagnosis runs, or while an agent hasn't picked up a lesson yet.
+    // Soon again while a diagnosis or a fix test runs, or while an agent hasn't picked up a lesson yet.
     refetchInterval: (q) =>
-      q.state.data?.issues.some((issue) => issue.diagnosis?.status === "pending")
+      q.state.data?.issues.some((issue) => issue.diagnosis?.status === "pending" || issue.fixTest?.status === "running")
         ? 3_000
         : q.state.data?.issues.some((issue) => issue.lesson?.status === "active" && !issue.lesson.deliveredAt)
           ? 10_000
@@ -168,7 +170,8 @@ export function Inbox() {
 
   const panel = selected && (
     <ProblemPanel
-      key={`${selected.id}:${selected.diagnosis?.status === "ready" ? selected.diagnosis.at : ""}:${selected.lesson?.id ?? ""}:${selected.lesson?.status ?? ""}`}
+      // A new diagnosis, lesson or finished test starts the fix over from its words.
+      key={`${selected.id}:${selected.diagnosis?.status === "ready" ? selected.diagnosis.at : ""}:${selected.lesson?.id ?? ""}:${selected.lesson?.status ?? ""}:${selected.fixTest?.status === "running" ? "" : (selected.fixTest?.at ?? "")}`}
       issue={selected}
       model={model}
       onClose={wide ? undefined : close}
@@ -426,11 +429,22 @@ function ProblemPanel({ issue, model, onClose, onIgnored }: { issue: Issue; mode
   const ai = readyDiagnosis(issue);
   const agent = harnessLabel(issue.harness);
   const active = issue.lesson?.status === "active" ? issue.lesson : null;
-  // The lesson to approve: the one turned off, in the owner's words, unless the model wrote a newer one.
-  const turnedOff = !active && !!issue.lesson && (!ai?.lesson || ai.at < issue.lesson.createdAt);
-  const proposed = active ? null : turnedOff ? issue.lesson!.text : (ai?.lesson ?? null);
+  // The fix to approve, newest first: the model's diagnosis, the words last tested (the owner's edit, or a rewrite), or the one turned off.
+  const latest = active
+    ? null
+    : [
+        ai?.lesson ? { text: ai.lesson, at: ai.at, from: "diagnosis" } : null,
+        issue.fixTest ? { text: issue.fixTest.lesson, at: issue.fixTest.at, from: "test" } : null,
+        issue.lesson ? { text: issue.lesson.text, at: issue.lesson.createdAt, from: "turned off" } : null,
+      ]
+        .filter((candidate) => candidate !== null)
+        .sort((a, b) => b.at.localeCompare(a.at))[0];
+  const proposed = latest?.text ?? null;
+  const turnedOff = latest?.from === "turned off";
   const [text, setText] = useState(proposed ?? "");
   const [copied, setCopied] = useState(false);
+  // The test of exactly these words, if there is one: Apply waits for it to pass.
+  const test = issue.fixTest && sameWords(issue.fixTest.lesson, text) ? issue.fixTest : null;
   const refresh = () => void queryClient.invalidateQueries({ queryKey: ["issues"] });
   const patch = (change: Partial<Issue>) =>
     queryClient.setQueryData<{ issues: Issue[] }>(["issues"], (old) => old && { ...old, issues: old.issues.map((i) => (i.id === issue.id ? { ...i, ...change } : i)) });
@@ -451,9 +465,15 @@ function ProblemPanel({ issue, model, onClose, onIgnored }: { issue: Issue; mode
     onSuccess: ({ diagnosis }) => patch({ diagnosis }),
     onSettled: refresh,
   });
+  const runTest = useMutation({
+    mutationFn: () => api.testFix(issue.id, text),
+    onSuccess: ({ fixTest }) => patch({ fixTest }),
+    onSettled: refresh,
+  });
   const pending = diagnose.isPending || issue.diagnosis?.status === "pending";
+  const testing = runTest.isPending || issue.fixTest?.status === "running";
   const copy = () => void navigator.clipboard.writeText(text).then(() => setCopied(true));
-  const error = [apply, turnOff, ignore, diagnose].find((m) => m.isError)?.error;
+  const error = [apply, turnOff, ignore, diagnose, runTest].find((m) => m.isError)?.error;
 
   const primary = issue.ignored ? (
     <button type="button" onClick={() => ignore.mutate(false)} disabled={ignore.isPending} className={SECONDARY}>
@@ -464,10 +484,20 @@ function ProblemPanel({ issue, model, onClose, onIgnored }: { issue: Issue; mode
       {turnOff.isPending && <Loader2 className="size-3.5 animate-spin" />}
       Turn off fix
     </button>
-  ) : proposed && issue.lessonsApply ? (
-    <button type="button" onClick={() => apply.mutate()} disabled={apply.isPending || !text.trim()} className={PRIMARY}>
+  ) : proposed && issue.lessonsApply && test?.status === "passed" ? (
+    <button type="button" onClick={() => apply.mutate()} disabled={apply.isPending} className={PRIMARY}>
       {apply.isPending && <Loader2 className="size-3.5 animate-spin" />}
       {turnedOff ? `Apply to ${agent} again` : `Apply fix to ${agent}`}
+    </button>
+  ) : proposed && issue.lessonsApply && test?.status === "untestable" ? (
+    <button type="button" onClick={copy} className={SECONDARY} title="It couldn't be tested, so Lucid won't apply it. You can still add it yourself.">
+      <Copy className="size-3.5" />
+      {copied ? "Copied" : "Copy fix"}
+    </button>
+  ) : proposed && issue.lessonsApply ? (
+    <button type="button" onClick={() => runTest.mutate()} disabled={testing || !text.trim() || !model} className={PRIMARY}>
+      {testing ? <Loader2 className="size-3.5 animate-spin" /> : <FlaskConical className="size-3.5" />}
+      {testing ? "Testing…" : test ? "Test again" : "Test fix"}
     </button>
   ) : proposed ? (
     <button type="button" onClick={copy} disabled={!text.trim()} className={PRIMARY}>
@@ -536,10 +566,12 @@ function ProblemPanel({ issue, model, onClose, onIgnored }: { issue: Issue; mode
               <Block icon={Wrench} title={ai ? "Recommended fix" : "How to fix it"}>
                 <FixSteps text={(ai ?? issue).fix} />
                 {proposed && (
-                  <Change agent={agent} text={text} onChange={setText} turnedOff={turnedOff}>
-                    {issue.lessonsApply
-                      ? `${agent} follows it from its next turn. You can turn it off any time.`
-                      : `Paste it into ${agent}'s instructions. Lucid can't apply it there by itself yet.`}
+                  <Change agent={agent} text={text} onChange={setText} turnedOff={turnedOff} locked={testing}>
+                    {issue.lessonsApply ? (
+                      <TestStatus test={test} edited={!!issue.fixTest && !test} running={testing} model={model} agent={agent} />
+                    ) : (
+                      <p>Paste it into {agent}'s instructions. Lucid can't apply or test it there by itself yet.</p>
+                    )}
                   </Change>
                 )}
               </Block>
@@ -629,8 +661,15 @@ function FixSteps({ text }: { text: string }) {
   );
 }
 
-/** The instruction the agent gets: read it, change it if you like, then approve it below. */
-function Change({ agent, text, onChange, turnedOff, children }: { agent: string; text: string; onChange: (text: string) => void; turnedOff: boolean; children: ReactNode }) {
+/** The instruction the agent gets: read it, change it if you like, test it, then approve it below. */
+function Change({
+  agent,
+  text,
+  onChange,
+  turnedOff,
+  locked,
+  children,
+}: { agent: string; text: string; onChange: (text: string) => void; turnedOff: boolean; locked: boolean; children: ReactNode }) {
   const [editing, setEditing] = useState(false);
   return (
     <div className="mt-3.5">
@@ -640,7 +679,9 @@ function Change({ agent, text, onChange, turnedOff, children }: { agent: string;
           <button
             type="button"
             onClick={() => setEditing(!editing)}
-            className="inline-flex items-center gap-1 rounded-md px-2 py-1 font-medium hover:bg-zinc-200/60 hover:text-zinc-900 dark:hover:bg-white/10 dark:hover:text-white"
+            // Words under test stay put until the result is in.
+            disabled={locked}
+            className="inline-flex items-center gap-1 rounded-md px-2 py-1 font-medium hover:bg-zinc-200/60 hover:text-zinc-900 disabled:opacity-40 dark:hover:bg-white/10 dark:hover:text-white"
           >
             <Pencil className="size-3" />
             {editing ? "Done" : "Edit"}
@@ -664,7 +705,87 @@ function Change({ agent, text, onChange, turnedOff, children }: { agent: string;
           )}
         </div>
       </div>
-      <p className="mt-1.5 text-xs text-zinc-500 dark:text-zinc-400">{children}</p>
+      <div className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">{children}</div>
+    </div>
+  );
+}
+
+/** The same fix, give or take spaces: what the server compares a test with. */
+const sameWords = (a: string, b: string) => a.replace(/\s+/g, " ").trim() === b.replace(/\s+/g, " ").trim();
+
+/** Where the fix stands: untested, being tested, or how it did on past runs, run by run. */
+function TestStatus({ test, edited, running, model, agent }: { test: FixTest | null; edited: boolean; running: boolean; model: string | null; agent: string }) {
+  const [open, setOpen] = useState(false);
+  if (!model) return <p>Testing a fix needs a model key (BASETEN_API_KEY) on the Lucid server; until then it can't be applied.</p>;
+  if (running) {
+    return (
+      <p className="flex items-center gap-1.5 text-zinc-600 dark:text-zinc-300">
+        <Loader2 className="size-3.5 shrink-0 animate-spin" />
+        {modelLabel(model)} is replaying up to 3 past runs with this fix. This takes a minute or two.
+      </p>
+    );
+  }
+  if (!test || test.status === "running") {
+    return (
+      <p className="flex items-start gap-1.5">
+        <FlaskConical className="mt-px size-3.5 shrink-0" />
+        {edited ? "You changed the fix since its test. Test it again before it goes to " : "Not tested yet. Every fix is tested on past runs before it goes to "}
+        {agent}.
+      </p>
+    );
+  }
+  if (test.status === "untestable" || test.status === "error") {
+    return (
+      <p className="flex items-start gap-1.5 text-amber-700 dark:text-amber-400">
+        <TriangleAlert className="mt-px size-3.5 shrink-0" />
+        {test.status === "untestable" ? `Can't be tested, so Lucid won't apply it: ${test.reason}` : `The test didn't finish: ${test.reason}`}
+      </p>
+    );
+  }
+  const passed = test.results.filter((result) => result.pass).length;
+  const total = test.results.length;
+  const cost = costLine({ inputTokens: test.inputTokens, outputTokens: test.outputTokens, latencyMs: test.latencyMs });
+  return (
+    <div className="space-y-1.5">
+      <p className={cx("flex items-start gap-1.5 font-medium", test.status === "passed" ? "text-emerald-700 dark:text-emerald-400" : "text-amber-700 dark:text-amber-400")}>
+        {test.status === "passed" ? <CircleCheck className="mt-px size-3.5 shrink-0" /> : <TriangleAlert className="mt-px size-3.5 shrink-0" />}
+        <span>
+          {test.status === "passed" ? `Passed on ${total} of ${total} past runs.` : `Failed on ${total - passed} of ${total} past runs.`}{" "}
+          <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} className="font-normal text-zinc-500 underline-offset-2 hover:underline dark:text-zinc-400">
+            {open ? "Hide details" : "Details"}
+          </button>
+        </span>
+      </p>
+      {test.revisedFrom && <p>{modelLabel(test.model)} rewrote the fix after the first version failed, then tested it again.</p>}
+      {test.standIn && (
+        <p>
+          Replayed with {modelLabel(test.model)} standing in for {test.standIn}, the model {agent} uses.
+        </p>
+      )}
+      {test.status === "passed" && <p>{agent} follows it from its next turn once applied. You can turn it off any time.</p>}
+      {open && (
+        <ul className="space-y-2 rounded-lg bg-zinc-50 p-3 dark:bg-white/[0.03]">
+          {test.results.map((result) => (
+            <li key={result.runId} className="flex gap-2">
+              {result.pass ? <CircleCheck className="mt-px size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" /> : <CircleX className="mt-px size-3.5 shrink-0 text-rose-600 dark:text-rose-400" />}
+              <span className="min-w-0">
+                <Link to={`/runs/${result.runId}`} className="font-medium text-zinc-700 hover:underline dark:text-zinc-200">
+                  {result.runName ?? "A past run"}
+                </Link>
+                : {result.reason}
+                <span className="mt-0.5 block truncate font-mono text-[11px] text-zinc-400" title={result.decision}>
+                  {result.decision}
+                </span>
+              </span>
+            </li>
+          ))}
+          {cost.text && (
+            <li className="text-zinc-400" title={cost.title}>
+              Test cost: {cost.text}
+            </li>
+          )}
+        </ul>
+      )}
     </div>
   );
 }

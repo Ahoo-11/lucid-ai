@@ -9,6 +9,7 @@ import { schema } from "../db";
 import { CLOSED, resolveAccount } from "../auth";
 import { arenaRoutes } from "../ee/arena/routes";
 import { createExplainer } from "../explain";
+import { createFixTester, failingDecisions } from "../fixtest";
 import { errorSignature, hintFor } from "../insights";
 import { LESSON_HARNESSES, applyLesson, cleanLesson, lessonsForIssues, runsSince, setLessonStatus } from "../lessons";
 import { publicEndpoint } from "../install";
@@ -20,7 +21,8 @@ import { listPlugins, requestUpdate } from "../plugins";
 import { currentSyncs } from "../syncs";
 import { writeBatch } from "../writer";
 
-const { apiKeys, blobs, ignoredIssues, projects, rawEvents, runs, sessions, steps } = schema;
+const { apiKeys, blobs, ignoredIssues, issueExplanations, lessons, projects, rawEvents, runs, sessions, steps } = schema;
+const UNTESTED = "Test this fix first: Lucid applies a fix only after it passes a test on past runs.";
 const STATUSES = new Set(["ok", "error", "running"]);
 /** The Spend view's periods, in days. */
 const USAGE_DAYS = new Set([1, 7, 30]);
@@ -74,6 +76,7 @@ export function apiRoutes(ctx: AppContext) {
   const app = new Hono<AppEnv>();
   const { db } = ctx;
   const explainer = createExplainer(ctx);
+  const tester = createFixTester(ctx);
 
   app.use("*", requireProject(ctx));
 
@@ -299,6 +302,7 @@ export function apiRoutes(ctx: AppContext) {
     // Opening the Inbox starts diagnoses for recurring problems never diagnosed, up to the daily cap.
     const diagnoses = await explainer.diagnoses(projectId, issues.slice(0, 200), { auto: autoDiagnose, ignored });
     const applied = await lessonsForIssues(db, projectId, issues.slice(0, 200).map((issue) => issue.id));
+    const tests = await tester.latest(projectId, issues.slice(0, 200).map((issue) => issue.id));
     const shown = await Promise.all(
       issues.map(async ({ failedAt, ...issue }) => {
         const lesson = applied.get(issue.id);
@@ -311,10 +315,31 @@ export function apiRoutes(ctx: AppContext) {
           // Whether Lucid can apply a lesson in this agent by itself (or it's one to copy).
           lessonsApply: LESSON_HARNESSES.has(issue.harness),
           ignored: ignored.has(issue.id),
+          fixTest: tests.get(issue.id) ?? null,
         };
       }),
     );
     return c.json({ issues: shown, diagnosisModel: explainer.enabled ? ctx.ai?.model : null, autoDiagnose });
+  });
+
+  // Testing a fix: the decisions where it went wrong, replayed with it added. Nothing reaches an agent without a pass.
+  app.post("/issues/:id/test", async (c) => {
+    if (!(c.req.header("content-type") ?? "").includes("application/json")) return c.json({ error: "Send JSON" }, 415);
+    if (!tester.enabled) return c.json({ error: "Testing a fix needs a model key: set BASETEN_API_KEY for the Lucid server." }, 409);
+    const projectId = c.get("projectId");
+    const text = cleanLesson(((await c.req.json().catch(() => ({}))) as { text?: unknown }).text);
+    if (!text) return c.json({ error: "Write the fix first." }, 400);
+    const issue = (await loadIssues(projectId)).find((candidate) => candidate.id === c.req.param("id"));
+    if (!issue) return c.json({ error: "That problem isn't in the Inbox anymore." }, 404);
+    // The judge needs to know the mistake: the model's diagnosis when there is one.
+    const [diagnosis] = await db
+      .select({ title: issueExplanations.title, why: issueExplanations.why })
+      .from(issueExplanations)
+      .where(and(eq(issueExplanations.projectId, projectId), eq(issueExplanations.issueId, issue.id), eq(issueExplanations.status, "ready")));
+    const about = diagnosis?.title && diagnosis.why ? diagnosis : issue;
+    const problem = [`${about.title}. ${about.why}`, issue.toolName && `The failing step: ${issue.toolName}.`, issue.sample && `The error: ${issue.sample.slice(0, 500)}`].filter(Boolean).join("\n");
+    const decisions = await failingDecisions(ctx, projectId, issue);
+    return c.json({ fixTest: await tester.start(projectId, { issueId: issue.id, problem, decisions }, text) });
   });
 
   // Ignore: out of the Inbox and its badge, and never diagnosed by itself. Restore brings it back.
@@ -348,12 +373,20 @@ export function apiRoutes(ctx: AppContext) {
     const issue = (await loadIssues(projectId)).find((candidate) => candidate.id === c.req.param("id"));
     if (!issue) return c.json({ error: "That problem isn't in the Inbox anymore." }, 404);
     if (!LESSON_HARNESSES.has(issue.harness)) return c.json({ error: `Lucid can't apply lessons in ${issue.harness} yet. Copy it into the agent's instructions instead.` }, 409);
+    if (!(await tester.passed(projectId, issue.id, text))) return c.json({ error: UNTESTED }, 409);
     return c.json({ lesson: await applyLesson(db, projectId, { issueId: issue.id, harness: issue.harness, text }) }, 201);
   });
 
   app.post("/lessons/:id/:status{on|off}", async (c) => {
     if (!(c.req.header("content-type") ?? "").includes("application/json")) return c.json({ error: "Send JSON" }, 415);
-    const lesson = await setLessonStatus(db, c.get("projectId"), c.req.param("id"), c.req.param("status") === "on" ? "active" : "off");
+    const projectId = c.get("projectId");
+    const on = c.req.param("status") === "on";
+    if (on) {
+      // Back on is the same as applying it: only with a passed test of these words.
+      const [row] = await db.select({ issueId: lessons.issueId, text: lessons.text }).from(lessons).where(and(eq(lessons.projectId, projectId), eq(lessons.id, c.req.param("id"))));
+      if (row?.issueId && !(await tester.passed(projectId, row.issueId, row.text))) return c.json({ error: UNTESTED }, 409);
+    }
+    const lesson = await setLessonStatus(db, projectId, c.req.param("id"), on ? "active" : "off");
     return lesson ? c.json({ lesson }) : c.json({ error: "No such lesson" }, 404);
   });
 

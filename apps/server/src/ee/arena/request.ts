@@ -87,7 +87,7 @@ export function outputOf(raw: string | null | undefined): { text?: string; toolC
   };
 }
 
-const textOf = (content: unknown): string => {
+export const textOf = (content: unknown): string => {
   if (typeof content === "string") return content;
   if (Array.isArray(content)) return content.map((part) => (isRecord(part) && typeof part.text === "string" ? part.text : "")).join("");
   return content === null || content === undefined ? "" : JSON.stringify(content);
