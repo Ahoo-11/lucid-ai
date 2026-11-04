@@ -50,7 +50,7 @@ export function HeroDemo() {
   return (
     <div role="img" aria-label="A sample run in Lucid: two failed edits are grouped in the Inbox with a suggested fix, then Arena finds a cheaper model that makes the same decision." className="relative">
       <div aria-hidden className="pointer-events-none absolute -inset-x-10 -top-10 bottom-0 rounded-[3rem] bg-brand-300/[0.07] blur-3xl" />
-      <div aria-hidden className="relative rounded-2xl bg-zinc-900/80 p-1.5 shadow-2xl shadow-black/60 ring-1 ring-white/10 backdrop-blur">
+      <div aria-hidden className="relative rounded-2xl bg-zinc-900 p-1.5 shadow-xl shadow-zinc-900/15 ring-1 ring-zinc-900">
         <div className="flex items-center gap-3 px-3 py-2">
           <div className="flex gap-1.5">
             <span className="size-2.5 rounded-full bg-zinc-700" />

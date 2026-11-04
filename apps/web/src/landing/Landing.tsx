@@ -1,6 +1,7 @@
 // The public landing page: what Lucid does, what it plugs into, and that it
-// is open source. Always dark, whatever the system theme. The only request it
-// makes is for the GitHub star count.
+// is open source. White like the app, with the app's faint ASCII texture;
+// product screens and code stay dark. The only request it makes is for the
+// GitHub star count.
 
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -27,17 +28,24 @@ import {
 } from "lucide-react";
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link } from "react-router";
-import { AsciiPicture } from "../ascii";
-import { GITHUB_REPO, GITHUB_URL, GridGlow, Logo, TraceLine, Underline, useDarkDocument } from "../brand";
+import { AsciiField, AsciiPicture, type PictureLayer } from "../ascii";
+import { GITHUB_REPO, GITHUB_URL, Logo, Underline } from "../brand";
 import { cx } from "../ui";
-import agents from "./agents.webp";
+import alfred from "./agents/dots-alfred.webp";
+import felipe from "./agents/dots-felipe.webp";
+import iggy from "./agents/dots-iggy.webp";
+import todd from "./agents/dots-todd.webp";
+import grokbot from "./agents/grokbot.svg?raw";
+import jolly from "./agents/jolly.webp";
+import openclaw from "./agents/openclaw.svg?raw";
+import hermes from "./logos/hermesagent.svg?raw";
 import { useClock } from "./clock";
 import { HeroDemo } from "./HeroDemo";
 import { AGENTS, BRANDS, type Brand, BrandMark, PROVIDERS } from "./logos";
 
 export function Landing() {
   const stars = useGitHubStars();
-  useDarkDocument();
+
   // The nav links jump to sections on this page.
   useEffect(() => {
     const root = document.documentElement;
@@ -48,7 +56,9 @@ export function Landing() {
     };
   }, []);
   return (
-    <div className="min-h-dvh overflow-x-clip bg-zinc-950 text-zinc-100">
+    // Its own stacking context, so the ASCII field sits above the page colour and under everything else.
+    <div className="relative isolate min-h-dvh overflow-x-clip bg-paper text-zinc-900">
+      <AsciiField theme="light" />
       <Nav stars={stars} />
       <main>
         <Hero stars={stars} />
@@ -93,7 +103,7 @@ function StartFree({ className, children = "Start free" }: { className?: string;
     <Link
       to="/sign-in"
       className={cx(
-        "group inline-flex items-center justify-center gap-2 rounded-full bg-brand-300 px-6 py-3 text-[15px] font-semibold text-zinc-950 shadow-[0_10px_40px_-10px_rgba(216,248,74,0.6)] transition hover:bg-brand-200",
+        "group inline-flex items-center justify-center gap-2 rounded-full bg-brand-300 px-6 py-3 text-[15px] font-semibold text-zinc-950 ring-1 ring-black/5 ring-inset transition hover:bg-brand-200",
         className,
       )}
     >
@@ -109,12 +119,12 @@ function GitHubButton({ stars }: { stars: number | null }) {
       href={GITHUB_URL}
       target="_blank"
       rel="noreferrer"
-      className="inline-flex items-center justify-center gap-2 rounded-full bg-white/[0.06] px-5 py-3 text-[15px] font-medium text-white ring-1 ring-white/15 transition hover:bg-white/10"
+      className="inline-flex items-center justify-center gap-2 rounded-full bg-white px-5 py-3 text-[15px] font-medium text-zinc-950 shadow-[0_1px_2px_rgba(24,24,27,0.05)] ring-1 ring-zinc-900/15 transition hover:bg-zinc-50"
     >
       <BrandMark brand={BRANDS.github} className="size-[18px]" />
       Star on GitHub
       {stars !== null && (
-        <span className="flex items-center gap-1 rounded-full bg-white/10 px-2 py-0.5 text-xs tabular-nums text-zinc-300">
+        <span className="flex items-center gap-1 rounded-full bg-zinc-900/[0.07] px-2 py-0.5 text-xs tabular-nums text-zinc-700">
           <Star className="size-3" />
           {formatStars(stars)}
         </span>
@@ -124,11 +134,11 @@ function GitHubButton({ stars }: { stars: number | null }) {
 }
 
 function Eyebrow({ children }: { children: ReactNode }) {
-  return <div className="font-mono text-xs tracking-wide text-brand-300">{children}</div>;
+  return <div className="font-mono text-xs tracking-wide text-brand-700">{children}</div>;
 }
 
 function SectionTitle({ children, className }: { children: ReactNode; className?: string }) {
-  return <h2 className={cx("mt-3 font-display text-3xl font-bold leading-[1.1] tracking-[-0.02em] text-balance text-white sm:text-5xl", className)}>{children}</h2>;
+  return <h2 className={cx("mt-3 font-display text-3xl font-bold leading-[1.1] tracking-[-0.02em] text-balance text-zinc-950 sm:text-5xl", className)}>{children}</h2>;
 }
 
 // ---------------------------------------------------------------------------
@@ -143,15 +153,15 @@ const NAV = [
 
 function Nav({ stars }: { stars: number | null }) {
   return (
-    <header className="sticky top-0 z-30 border-b border-white/5 bg-zinc-950/75 backdrop-blur-xl">
+    <header className="sticky top-0 z-30 border-b border-zinc-900/5 bg-paper/80 backdrop-blur-xl">
       <div className="mx-auto flex h-16 max-w-6xl items-center gap-6 px-4 sm:px-6">
-        <a href="#top" className="flex items-center gap-2.5 font-display text-xl font-bold tracking-tight text-white">
+        <a href="#top" className="flex items-center gap-2.5 font-display text-xl font-bold tracking-tight text-zinc-950">
           <Logo />
           Lucid
         </a>
         <nav className="hidden items-center gap-1 md:flex">
           {NAV.map(([href, label]) => (
-            <a key={href} href={href} className="rounded-full px-3 py-1.5 text-sm text-zinc-400 transition hover:bg-white/5 hover:text-white">
+            <a key={href} href={href} className="rounded-full px-3 py-1.5 text-sm text-zinc-600 transition hover:bg-zinc-900/[0.04] hover:text-zinc-950">
               {label}
             </a>
           ))}
@@ -161,12 +171,12 @@ function Nav({ stars }: { stars: number | null }) {
             href={GITHUB_URL}
             target="_blank"
             rel="noreferrer"
-            className="hidden items-center gap-1.5 rounded-full px-3 py-2 text-sm text-zinc-300 transition hover:bg-white/5 hover:text-white sm:inline-flex"
+            className="hidden items-center gap-1.5 rounded-full px-3 py-2 text-sm text-zinc-700 transition hover:bg-zinc-900/[0.04] hover:text-zinc-950 sm:inline-flex"
           >
             <BrandMark brand={BRANDS.github} className="size-4" />
             {stars !== null ? <span className="tabular-nums">{formatStars(stars)}</span> : "GitHub"}
           </a>
-          <Link to="/sign-in" className="rounded-full px-4 py-2 text-sm font-medium text-zinc-200 ring-1 ring-white/15 transition hover:bg-white/5">
+          <Link to="/sign-in" className="rounded-full px-4 py-2 text-sm font-medium text-zinc-800 ring-1 ring-zinc-900/15 transition hover:bg-zinc-900/[0.04]">
             Sign in
           </Link>
           <Link to="/sign-in" className="rounded-full bg-brand-300 px-4 py-2 text-sm font-semibold text-zinc-950 transition hover:bg-brand-200">
@@ -213,7 +223,7 @@ function AgentChip() {
   return (
     <span
       style={{ width }}
-      className="inline-grid translate-y-[0.04em] grid-cols-[minmax(0,1fr)] place-items-center overflow-hidden rounded-[0.28em] bg-white/[0.07] pb-[0.06em] align-baseline ring-1 ring-white/15 transition-[width] duration-500 ease-out motion-reduce:transition-none"
+      className="inline-grid translate-y-[0.04em] grid-cols-[minmax(0,1fr)] place-items-center overflow-hidden rounded-[0.28em] bg-white pb-[0.06em] align-baseline shadow-[0_1px_2px_rgba(24,24,27,0.05)] ring-1 ring-zinc-900/10 transition-[width] duration-500 ease-out motion-reduce:transition-none"
     >
       {ROTATION.map((item, i) => (
         <span
@@ -226,8 +236,8 @@ function AgentChip() {
             i === active ? "translate-y-0 opacity-100" : i === previous ? "-translate-y-[0.7em] opacity-0" : "translate-y-[0.7em] opacity-0",
           )}
         >
-          {item.brand ? <BrandMark brand={item.brand} className="size-[0.72em]" /> : <Bot className="size-[0.72em] text-brand-300" strokeWidth={2.25} />}
-          <span className={item.brand ? undefined : "text-brand-300"}>{item.name}</span>
+          {item.brand ? <BrandMark brand={item.brand} className="size-[0.72em]" /> : <Bot className="size-[0.72em] text-brand-700" strokeWidth={2.25} />}
+          <span className={item.brand ? undefined : "text-brand-700"}>{item.name}</span>
         </span>
       ))}
     </span>
@@ -237,19 +247,19 @@ function AgentChip() {
 function Hero({ stars }: { stars: number | null }) {
   return (
     <section id="top" className="relative scroll-mt-20">
-      <Backdrop />
+
       <div className="relative mx-auto max-w-6xl px-4 pt-14 text-center sm:px-6 sm:pt-20">
         <a
           href={GITHUB_URL}
           target="_blank"
           rel="noreferrer"
-          className="inline-flex items-center gap-2 rounded-full bg-white/[0.04] py-1 pr-3 pl-1 text-xs text-zinc-300 ring-1 ring-white/10 transition hover:ring-white/25"
+          className="inline-flex items-center gap-2 rounded-full bg-zinc-900/[0.04] py-1 pr-3 pl-1 text-xs text-zinc-700 ring-1 ring-zinc-900/10 transition hover:ring-zinc-900/25"
         >
           <span className="rounded-full bg-brand-300 px-2 py-0.5 font-semibold text-zinc-950">Open source</span>
           MIT core, self-host with Docker
           <ArrowRight className="size-3.5 text-zinc-500" />
         </a>
-        <h1 className="mx-auto mt-7 max-w-5xl font-display text-[2.6rem] font-bold leading-[1.08] tracking-[-0.035em] text-white sm:text-6xl lg:text-[5.25rem]">
+        <h1 className="mx-auto mt-7 max-w-5xl font-display text-[2.6rem] font-bold leading-[1.08] tracking-[-0.035em] text-zinc-950 sm:text-6xl lg:text-[5.25rem]">
           <span className="sr-only">Make your AI agent smarter every run</span>
           <span aria-hidden className="block">
             Make <AgentChip />
@@ -262,7 +272,7 @@ function Hero({ stars }: { stars: number | null }) {
             </span>
           </span>
         </h1>
-        <p className="mx-auto mt-7 max-w-2xl text-base leading-relaxed text-zinc-400 sm:text-lg">
+        <p className="mx-auto mt-7 max-w-2xl text-base leading-relaxed text-zinc-600 sm:text-lg">
           See every prompt, tool call and decision your agent makes. Lucid finds where a run broke, tells you how to fix it, and proves which model or prompt does better on your own runs, blind.
         </p>
         <div className="mt-9 flex flex-col items-center justify-center gap-3 sm:flex-row">
@@ -272,7 +282,7 @@ function Hero({ stars }: { stars: number | null }) {
         <ul className="mt-5 flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-xs text-zinc-500">
           {["Free while in beta", "MIT-licensed core", "Provider keys never stored"].map((item) => (
             <li key={item} className="flex items-center gap-1.5">
-              <Check className="size-3.5 text-brand-300" />
+              <Check className="size-3.5 text-brand-700" />
               {item}
             </li>
           ))}
@@ -287,25 +297,33 @@ function Hero({ stars }: { stars: number | null }) {
   );
 }
 
-function Backdrop() {
-  return (
-    <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
-      <GridGlow />
-      <TraceLine className="absolute top-36 -left-6 hidden w-60 lg:block xl:left-4" />
-      <TraceLine className="absolute top-20 -right-6 hidden w-60 -scale-x-100 lg:block xl:right-4" />
-    </div>
-  );
-}
+
 
 /**
- * The agents people know by their faces, through Lucid's ASCII filter at low
- * power. On paper, like the app: half of them are black and would vanish into
- * this page.
+ * The agents people know by their faces, standing together as they do in
+ * their own marketing: OpenClaw's Molty, Meta Muse's Jolly, Hermes Agent,
+ * Grok Bot and OpenAI's dots (Todd, Iggy, Felipe, Alfred). Back to front, in
+ * a 865 by 264 picture. Molty and Hermes stand over Jolly's edges.
+ * Sources: Molty and Grok Bot from Lobe Icons (MIT), like the logos; the dots
+ * from OpenAI's "Introducing dots" page; Jolly cut from a screenshot, as Meta
+ * publishes no plain file of it.
  */
+const LINEUP: PictureLayer[] = [
+  { src: jolly, box: [143, 5, 162, 255] },
+  { src: openclaw, box: [2, 46, 186, 186] },
+  { src: grokbot, box: [435, 52, 212, 212] },
+  { src: hermes, box: [272, 50, 205, 205] },
+  { src: todd, box: [627, 64, 118, 118] },
+  { src: iggy, box: [740, 67, 122, 122] },
+  { src: felipe, box: [606, 132, 125, 125] },
+  { src: alfred, box: [738, 134, 124, 124] },
+];
+
+/** The lineup through Lucid's ASCII filter, at low power, straight on the page. */
 function AgentLineup() {
   return (
-    <div className="mx-auto mt-16 max-w-4xl rounded-[1.75rem] bg-paper px-4 pt-5 pb-4 ring-1 ring-white/10 sm:px-10 sm:pt-10 sm:pb-8">
-      <AsciiPicture src={agents} ratio={859 / 255} alt="The avatars of popular AI agents" />
+    <div className="mx-auto mt-16 max-w-4xl">
+      <AsciiPicture layers={LINEUP} size={[865, 264]} alt="OpenClaw, Meta Muse, Hermes Agent, Grok Bot and OpenAI's dots" />
     </div>
   );
 }
@@ -313,7 +331,7 @@ function AgentLineup() {
 function LogoWall() {
   return (
     <div className="mx-auto mt-16 max-w-3xl">
-      <p className="text-sm text-zinc-400">Plugs into the agents and models you already use</p>
+      <p className="text-sm text-zinc-600">Plugs into the agents and models you already use</p>
       <LogoRow label="Works with" brands={AGENTS} />
       <LogoRow label="Model providers" brands={PROVIDERS} />
       <p className="mt-6 text-xs text-zinc-500">…and anything that speaks OpenTelemetry or an OpenAI-style API.</p>
@@ -338,12 +356,12 @@ function LogoRow({ label, brands }: { label: string; brands: Brand[] }) {
 
 function LogoTile({ brand }: { brand: Brand }) {
   return (
-    <span className="group relative flex size-12 items-center justify-center rounded-2xl bg-zinc-900 text-zinc-100 ring-1 ring-white/10 transition hover:-translate-y-0.5 hover:bg-zinc-800/80 hover:ring-brand-300/50 sm:size-14">
+    <span className="group relative flex size-12 items-center justify-center rounded-2xl bg-white text-zinc-900 shadow-[0_1px_2px_rgba(24,24,27,0.05)] ring-1 ring-zinc-900/10 transition hover:-translate-y-0.5 hover:ring-zinc-900/25 sm:size-14">
       <BrandMark brand={brand} className="size-6 sm:size-7" />
       <span className="sr-only">{brand.name}</span>
       <span
         aria-hidden
-        className="pointer-events-none absolute top-full z-10 mt-2 whitespace-nowrap rounded-md bg-zinc-800 px-2 py-1 text-[11px] text-zinc-200 opacity-0 ring-1 ring-white/10 transition group-hover:opacity-100"
+        className="pointer-events-none absolute top-full z-10 mt-2 whitespace-nowrap rounded-md bg-zinc-900 px-2 py-1 text-[11px] text-white opacity-0 transition group-hover:opacity-100"
       >
         {brand.name}
       </span>
@@ -362,36 +380,36 @@ const PAINS = [
 
 function Problem() {
   return (
-    <section id="why" className="scroll-mt-20 border-t border-white/5 py-24 sm:py-32">
+    <section id="why" className="scroll-mt-20 border-t border-zinc-900/5 py-24 sm:py-32">
       <div className="mx-auto grid max-w-6xl gap-12 px-4 sm:px-6 lg:grid-cols-2 lg:items-center lg:gap-16">
         <div>
           <Eyebrow>01 · The problem</Eyebrow>
           <SectionTitle>
             Your agent ran 47 steps, spent $3.20 and failed. <span className="text-zinc-500">Which step broke it?</span>
           </SectionTitle>
-          <p className="mt-6 max-w-lg text-zinc-400 sm:text-lg">
+          <p className="mt-6 max-w-lg text-zinc-600 sm:text-lg">
             Logs show you everything and explain nothing: span trees, raw JSON, token counts. So you read transcripts until you find the one tool call that went sideways, and hope the next run doesn't do it again.
           </p>
         </div>
         <ul className="space-y-3">
           {PAINS.map((pain) => (
-            <li key={pain.title} className="flex gap-4 rounded-2xl bg-white/[0.03] p-5 ring-1 ring-white/[0.07]">
+            <li key={pain.title} className="flex gap-4 rounded-2xl bg-white p-5 ring-1 ring-zinc-900/[0.07]">
               <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-rose-500/10 text-rose-300 ring-1 ring-rose-500/20">
                 <pain.icon className="size-5" />
               </span>
               <div>
-                <div className="font-medium text-white">{pain.title}</div>
-                <p className="mt-1 text-sm text-zinc-400">{pain.text}</p>
+                <div className="font-medium text-zinc-950">{pain.title}</div>
+                <p className="mt-1 text-sm text-zinc-600">{pain.text}</p>
               </div>
             </li>
           ))}
-          <li className="flex gap-4 rounded-2xl bg-brand-300/[0.06] p-5 ring-1 ring-brand-300/25">
+          <li className="flex gap-4 rounded-2xl bg-brand-50 p-5 ring-1 ring-brand-600/25">
             <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-brand-300 text-zinc-950">
               <Sparkles className="size-5" />
             </span>
             <div>
-              <div className="font-medium text-white">Lucid turns each run into a story</div>
-              <p className="mt-1 text-sm text-zinc-400">Read what happened in a minute, see the failure grouped with every run it hit, and get the fix.</p>
+              <div className="font-medium text-zinc-950">Lucid turns each run into a story</div>
+              <p className="mt-1 text-sm text-zinc-600">Read what happened in a minute, see the failure grouped with every run it hit, and get the fix.</p>
             </div>
           </li>
         </ul>
@@ -447,7 +465,7 @@ const SNIPPETS: Snippet[] = [
 
 function HowItWorks() {
   return (
-    <section id="how" className="scroll-mt-20 border-t border-white/5 py-24 sm:py-32">
+    <section id="how" className="scroll-mt-20 border-t border-zinc-900/5 py-24 sm:py-32">
       <div className="mx-auto max-w-6xl px-4 sm:px-6">
         <div className="mx-auto max-w-2xl text-center">
           <Eyebrow>02 · How it works</Eyebrow>
@@ -455,15 +473,15 @@ function HowItWorks() {
         </div>
         <ol className="mt-14 grid gap-4 md:grid-cols-3">
           {HOW.map((step, i) => (
-            <li key={step.title} className="relative rounded-2xl bg-white/[0.03] p-6 ring-1 ring-white/[0.07]">
+            <li key={step.title} className="relative rounded-2xl bg-white p-6 ring-1 ring-zinc-900/[0.07]">
               <div className="flex items-center justify-between">
-                <span className="flex size-11 items-center justify-center rounded-xl bg-white/[0.06] text-brand-300 ring-1 ring-white/10">
+                <span className="flex size-11 items-center justify-center rounded-xl bg-zinc-900/[0.04] text-brand-700 ring-1 ring-zinc-900/10">
                   <step.icon className="size-5" />
                 </span>
-                <span className="font-display text-5xl font-bold text-white/[0.07]">{i + 1}</span>
+                <span className="font-display text-5xl font-bold text-zinc-900/[0.06]">{i + 1}</span>
               </div>
-              <h3 className="mt-5 font-display text-xl font-semibold text-white">{step.title}</h3>
-              <p className="mt-2 text-sm leading-relaxed text-zinc-400">{step.text}</p>
+              <h3 className="mt-5 font-display text-xl font-semibold text-zinc-950">{step.title}</h3>
+              <p className="mt-2 text-sm leading-relaxed text-zinc-600">{step.text}</p>
             </li>
           ))}
         </ol>
@@ -496,7 +514,7 @@ function Snippets() {
             onClick={() => setActive(s.id)}
             className={cx(
               "inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium ring-1 transition",
-              s.id === active ? "bg-white text-zinc-950 ring-white" : "bg-white/[0.04] text-zinc-300 ring-white/10 hover:bg-white/[0.08]",
+              s.id === active ? "bg-zinc-900 text-white ring-zinc-900" : "bg-white text-zinc-700 ring-zinc-900/10 hover:ring-zinc-900/25",
             )}
           >
             {s.brand ? <BrandMark brand={s.brand} className="size-4" /> : <Plug className="size-4" />}
@@ -504,7 +522,7 @@ function Snippets() {
           </button>
         ))}
       </div>
-      <div role="tabpanel" className="mt-5 overflow-hidden rounded-2xl bg-zinc-900/80 text-left ring-1 ring-white/10">
+      <div role="tabpanel" className="mt-5 overflow-hidden rounded-2xl bg-zinc-950 text-left ring-1 ring-zinc-900">
         <div className="flex items-center justify-between border-b border-white/5 px-4 py-2.5">
           <span className="text-xs text-zinc-500">{snippet.title}</span>
           <button type="button" onClick={copy} className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-zinc-400 transition hover:bg-white/5 hover:text-white">
@@ -549,12 +567,12 @@ function highlight(line: string): ReactNode {
 
 function Features() {
   return (
-    <section id="features" className="scroll-mt-20 border-t border-white/5 py-24 sm:py-32">
+    <section id="features" className="scroll-mt-20 border-t border-zinc-900/5 py-24 sm:py-32">
       <div className="mx-auto max-w-6xl px-4 sm:px-6">
         <div className="mx-auto max-w-2xl text-center">
           <Eyebrow>03 · What you get</Eyebrow>
           <SectionTitle>
-            See it. Fix it. <span className="text-brand-300">Prove it.</span>
+            See it. Fix it. <span className="text-brand-700">Prove it.</span>
           </SectionTitle>
         </div>
         <div className="mt-16 space-y-20 sm:space-y-28">
@@ -583,10 +601,10 @@ function Features() {
         </div>
         <ul className="mt-24 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {EXTRAS.map((extra) => (
-            <li key={extra.title} className="rounded-2xl bg-white/[0.03] p-5 ring-1 ring-white/[0.07]">
-              <extra.icon className="size-5 text-brand-300" />
-              <div className="mt-4 font-medium text-white">{extra.title}</div>
-              <p className="mt-1 text-sm text-zinc-400">{extra.text}</p>
+            <li key={extra.title} className="rounded-2xl bg-white p-5 ring-1 ring-zinc-900/[0.07]">
+              <extra.icon className="size-5 text-brand-700" />
+              <div className="mt-4 font-medium text-zinc-950">{extra.title}</div>
+              <p className="mt-1 text-sm text-zinc-600">{extra.text}</p>
             </li>
           ))}
         </ul>
@@ -606,13 +624,13 @@ function FeatureRow({ step, title, text, points, visual, flip }: { step: string;
   return (
     <div className="grid items-center gap-10 lg:grid-cols-2 lg:gap-16">
       <div className={cx(flip && "lg:order-2")}>
-        <div className="inline-flex items-center gap-2 rounded-full bg-brand-300/10 px-3 py-1 text-xs font-semibold text-brand-300 ring-1 ring-brand-300/25">{step}</div>
-        <h3 className="mt-4 font-display text-2xl font-bold tracking-tight text-balance text-white sm:text-4xl">{title}</h3>
-        <p className="mt-4 leading-relaxed text-zinc-400 sm:text-lg">{text}</p>
+        <div className="inline-flex items-center gap-2 rounded-full bg-brand-100 px-3 py-1 text-xs font-semibold text-brand-700 ring-1 ring-brand-600/25">{step}</div>
+        <h3 className="mt-4 font-display text-2xl font-bold tracking-tight text-balance text-zinc-950 sm:text-4xl">{title}</h3>
+        <p className="mt-4 leading-relaxed text-zinc-600 sm:text-lg">{text}</p>
         <ul className="mt-6 space-y-2.5">
           {points.map((point) => (
-            <li key={point} className="flex items-start gap-2.5 text-sm text-zinc-300">
-              <Check className="mt-0.5 size-4 shrink-0 text-brand-300" />
+            <li key={point} className="flex items-start gap-2.5 text-sm text-zinc-700">
+              <Check className="mt-0.5 size-4 shrink-0 text-brand-700" />
               {point}
             </li>
           ))}
@@ -625,7 +643,7 @@ function FeatureRow({ step, title, text, points, visual, flip }: { step: string;
 
 function MockFrame({ children, label }: { children: ReactNode; label: string }) {
   return (
-    <div className="rounded-2xl bg-zinc-900/80 p-1.5 shadow-2xl shadow-black/40 ring-1 ring-white/10">
+    <div className="rounded-2xl bg-zinc-900 p-1.5 shadow-xl shadow-zinc-900/15 ring-1 ring-zinc-900">
       <div className="px-3 py-2 text-[11px] text-zinc-500">{label}</div>
       <div className="rounded-xl bg-zinc-950 p-5 ring-1 ring-white/5">{children}</div>
     </div>
@@ -778,15 +796,15 @@ const OPEN_POINTS = [
 
 function OpenSource({ stars }: { stars: number | null }) {
   return (
-    <section id="open-source" className="relative scroll-mt-20 overflow-hidden border-t border-white/5 py-24 sm:py-32">
-      <div aria-hidden className="pointer-events-none absolute top-1/2 right-[-12rem] size-[36rem] -translate-y-1/2 rounded-full bg-brand-300/[0.06] blur-[120px]" />
+    <section id="open-source" className="relative scroll-mt-20 overflow-hidden border-t border-zinc-900/5 py-24 sm:py-32">
+
       <div className="relative mx-auto grid max-w-6xl gap-12 px-4 sm:px-6 lg:grid-cols-2 lg:items-center lg:gap-16">
         <div>
           <Eyebrow>04 · Open source</Eyebrow>
           <SectionTitle>
-            Open source. <span className="text-brand-300">Run it anywhere.</span>
+            Open source. <span className="text-brand-700">Run it anywhere.</span>
           </SectionTitle>
-          <p className="mt-6 max-w-lg text-zinc-400 sm:text-lg">
+          <p className="mt-6 max-w-lg text-zinc-600 sm:text-lg">
             Lucid's core is MIT-licensed. Read every line, run it on your own server and keep your traces on your own disk. Or use the hosted version and skip the setup.
           </p>
           <ul className="mt-8 space-y-4">
@@ -796,8 +814,8 @@ function OpenSource({ stars }: { stars: number | null }) {
                   <Check className="size-3" strokeWidth={3} />
                 </span>
                 <div>
-                  <div className="font-medium text-white">{point.title}</div>
-                  <p className="text-sm text-zinc-400">{point.text}</p>
+                  <div className="font-medium text-zinc-950">{point.title}</div>
+                  <p className="text-sm text-zinc-600">{point.text}</p>
                 </div>
               </li>
             ))}
@@ -808,7 +826,7 @@ function OpenSource({ stars }: { stars: number | null }) {
               href={`${GITHUB_URL}#readme`}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex items-center justify-center gap-1.5 rounded-full px-5 py-3 text-[15px] font-medium text-zinc-300 transition hover:text-white"
+              className="inline-flex items-center justify-center gap-1.5 rounded-full px-5 py-3 text-[15px] font-medium text-zinc-700 transition hover:text-zinc-950"
             >
               Read the docs
               <ArrowRight className="size-4" />
@@ -816,20 +834,20 @@ function OpenSource({ stars }: { stars: number | null }) {
           </div>
         </div>
         <div className="space-y-4">
-          <a href={GITHUB_URL} target="_blank" rel="noreferrer" className="block rounded-2xl bg-white/[0.03] p-5 ring-1 ring-white/10 transition hover:ring-white/20">
+          <a href={GITHUB_URL} target="_blank" rel="noreferrer" className="block rounded-2xl bg-white p-5 ring-1 ring-zinc-900/10 transition hover:ring-zinc-900/20">
             <div className="flex items-center gap-3">
-              <BrandMark brand={BRANDS.github} className="size-6 text-white" />
-              <span className="font-mono text-sm text-zinc-200">
-                Ahoo-11 / <span className="font-semibold text-white">lucid-ai</span>
+              <BrandMark brand={BRANDS.github} className="size-6 text-zinc-950" />
+              <span className="font-mono text-sm text-zinc-800">
+                Ahoo-11 / <span className="font-semibold text-zinc-950">lucid-ai</span>
               </span>
               {stars !== null && (
-                <span className="ml-auto flex items-center gap-1 text-sm text-zinc-400 tabular-nums">
+                <span className="ml-auto flex items-center gap-1 text-sm text-zinc-600 tabular-nums">
                   <Star className="size-4" />
                   {formatStars(stars)}
                 </span>
               )}
             </div>
-            <p className="mt-3 text-sm text-zinc-400">Observability and blind model testing for AI agents.</p>
+            <p className="mt-3 text-sm text-zinc-600">Observability and blind model testing for AI agents.</p>
             <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-zinc-500">
               <span className="flex items-center gap-1.5">
                 <span className="size-2.5 rounded-full bg-[#3178c6]" />
@@ -839,10 +857,10 @@ function OpenSource({ stars }: { stars: number | null }) {
                 <span className="size-2.5 rounded-full bg-[#3572a5]" />
                 Python
               </span>
-              <span className="rounded-full px-2 py-0.5 ring-1 ring-white/15">MIT core</span>
+              <span className="rounded-full px-2 py-0.5 ring-1 ring-zinc-900/15">MIT core</span>
             </div>
           </a>
-          <div className="overflow-hidden rounded-2xl bg-zinc-900/80 ring-1 ring-white/10">
+          <div className="overflow-hidden rounded-2xl bg-zinc-950 ring-1 ring-zinc-900">
             <div className="flex items-center gap-1.5 border-b border-white/5 px-4 py-2.5">
               <span className="size-2.5 rounded-full bg-zinc-700" />
               <span className="size-2.5 rounded-full bg-zinc-700" />
@@ -906,20 +924,20 @@ const FAQ = [
 
 function Faq() {
   return (
-    <section id="faq" className="scroll-mt-20 border-t border-white/5 py-24 sm:py-32">
+    <section id="faq" className="scroll-mt-20 border-t border-zinc-900/5 py-24 sm:py-32">
       <div className="mx-auto max-w-3xl px-4 sm:px-6">
         <div className="text-center">
           <Eyebrow>05 · FAQ</Eyebrow>
           <SectionTitle>Questions, answered</SectionTitle>
         </div>
-        <div className="mt-12 divide-y divide-white/[0.07] rounded-2xl bg-white/[0.02] ring-1 ring-white/[0.07]">
+        <div className="mt-12 divide-y divide-zinc-900/[0.07] rounded-2xl bg-white ring-1 ring-zinc-900/[0.07]">
           {FAQ.map((item) => (
             <details key={item.q} className="group px-5 sm:px-6">
-              <summary className="flex cursor-pointer list-none items-center justify-between gap-4 py-5 font-medium text-white [&::-webkit-details-marker]:hidden">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-4 py-5 font-medium text-zinc-950 [&::-webkit-details-marker]:hidden">
                 {item.q}
                 <ChevronDown className="size-5 shrink-0 text-zinc-500 transition-transform group-open:rotate-180" />
               </summary>
-              <p className="pb-5 text-zinc-400">{item.a}</p>
+              <p className="pb-5 text-zinc-600">{item.a}</p>
             </details>
           ))}
         </div>
@@ -933,14 +951,14 @@ function Faq() {
 
 function FinalCta({ stars }: { stars: number | null }) {
   return (
-    <section className="relative overflow-hidden border-t border-white/5 py-24 sm:py-32">
-      <div aria-hidden className="pointer-events-none absolute bottom-[-16rem] left-1/2 h-[30rem] w-[60rem] -translate-x-1/2 rounded-full bg-brand-300/[0.08] blur-[120px]" />
+    <section className="relative overflow-hidden border-t border-zinc-900/5 py-24 sm:py-32">
+
       <div className="relative mx-auto grid max-w-6xl items-center gap-14 px-4 sm:px-6 lg:grid-cols-2">
         <div className="text-center lg:text-left">
-          <h2 className="font-display text-4xl font-bold leading-[1.05] tracking-[-0.03em] text-balance text-white sm:text-6xl">
-            Stop guessing why your agent <span className="text-brand-300">failed.</span>
+          <h2 className="font-display text-4xl font-bold leading-[1.05] tracking-[-0.03em] text-balance text-zinc-950 sm:text-6xl">
+            Stop guessing why your agent <span className="text-brand-700">failed.</span>
           </h2>
-          <p className="mx-auto mt-6 max-w-md text-zinc-400 sm:text-lg lg:mx-0">Connect your first agent in a minute. Free while in beta, open source for good.</p>
+          <p className="mx-auto mt-6 max-w-md text-zinc-600 sm:text-lg lg:mx-0">Connect your first agent in a minute. Free while in beta, open source for good.</p>
           <div className="mt-9 flex flex-col items-center gap-3 sm:flex-row sm:justify-center lg:justify-start">
             <StartFree />
             <GitHubButton stars={stars} />
@@ -956,12 +974,12 @@ function FinalCta({ stars }: { stars: number | null }) {
 function Orbit() {
   return (
     <div aria-hidden className="relative mx-auto size-[19rem] [--inner:5.8rem] [--outer:9.5rem] sm:size-[26rem] sm:[--inner:8rem] sm:[--outer:13rem]">
-      <div className="absolute inset-0 rounded-full border border-white/[0.07]" />
-      <div className="absolute inset-[19%] rounded-full border border-dashed border-white/[0.08]" />
+      <div className="absolute inset-0 rounded-full border border-zinc-900/[0.07]" />
+      <div className="absolute inset-[19%] rounded-full border border-dashed border-zinc-900/[0.08]" />
       <Ring brands={PROVIDERS} radius="var(--outer)" className="motion-safe:animate-[orbit_90s_linear_infinite]" tileClass="motion-safe:animate-[orbit_90s_linear_infinite_reverse]" />
       <Ring brands={AGENTS} radius="var(--inner)" className="motion-safe:animate-[orbit_60s_linear_infinite_reverse]" tileClass="motion-safe:animate-[orbit_60s_linear_infinite]" />
       <div className="absolute inset-0 flex items-center justify-center">
-        <span className="flex size-20 items-center justify-center rounded-full bg-brand-300 shadow-[0_0_80px_10px_rgba(216,248,74,0.25)] sm:size-24">
+        <span className="flex size-20 items-center justify-center rounded-full bg-brand-300 ring-1 ring-black/10 sm:size-24">
           <span className="size-8 rounded-full bg-zinc-950 sm:size-10" />
         </span>
       </div>
@@ -977,7 +995,7 @@ function Ring({ brands, radius, className, tileClass }: { brands: Brand[]; radiu
         return (
           <div key={brand.name} className="absolute top-1/2 left-1/2 size-0" style={{ transform: `rotate(${angle}deg) translateY(calc(-1 * ${radius})) rotate(${-angle}deg)` }}>
             <div className={cx("absolute -top-5 -left-5 size-10 sm:-top-6 sm:-left-6 sm:size-12", tileClass)}>
-              <span className="flex size-full items-center justify-center rounded-xl bg-zinc-900 text-zinc-100 ring-1 ring-white/10">
+              <span className="flex size-full items-center justify-center rounded-xl bg-white text-zinc-900 shadow-[0_1px_2px_rgba(24,24,27,0.05)] ring-1 ring-zinc-900/10">
                 <BrandMark brand={brand} className="size-5 sm:size-6" />
               </span>
             </div>
@@ -993,10 +1011,10 @@ function Ring({ brands, radius, className, tileClass }: { brands: Brand[]; radiu
 
 function Footer() {
   return (
-    <footer className="border-t border-white/5 py-12">
+    <footer className="border-t border-zinc-900/5 py-12">
       <div className="mx-auto flex max-w-6xl flex-col gap-8 px-4 sm:flex-row sm:items-start sm:justify-between sm:px-6">
         <div className="max-w-xs">
-          <div className="flex items-center gap-2.5 font-display text-lg font-bold text-white">
+          <div className="flex items-center gap-2.5 font-display text-lg font-bold text-zinc-950">
             <Logo />
             Lucid
           </div>
@@ -1023,7 +1041,7 @@ function Footer() {
           </FooterColumn>
         </div>
       </div>
-      <div className="mx-auto mt-10 max-w-6xl px-4 text-xs text-zinc-600 sm:px-6">© {new Date().getFullYear()} Lucid · MIT-licensed core</div>
+      <div className="mx-auto mt-10 max-w-6xl px-4 text-xs text-zinc-400 sm:px-6">© {new Date().getFullYear()} Lucid · MIT-licensed core</div>
     </footer>
   );
 }
@@ -1031,8 +1049,8 @@ function Footer() {
 function FooterColumn({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div>
-      <div className="font-medium text-zinc-300">{title}</div>
-      <div className="mt-3 flex flex-col gap-2 text-zinc-500 [&>a:hover]:text-white [&>a]:transition">{children}</div>
+      <div className="font-medium text-zinc-700">{title}</div>
+      <div className="mt-3 flex flex-col gap-2 text-zinc-500 [&>a:hover]:text-zinc-950 [&>a]:transition">{children}</div>
     </div>
   );
 }

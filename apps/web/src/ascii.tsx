@@ -1,8 +1,8 @@
 // A faint field of ASCII characters drifting behind the app, like a shader
 // drawn in text: grey on the paper (light on black in dark mode), densest at
 // the top and gone by the middle of the screen, so the cards stay clean.
-// Still for people who ask for less motion. AsciiPicture, further down, draws a
-// picture through the same filter.
+// Still for people who ask for less motion. AsciiPicture, further down, draws
+// pictures through the same filter.
 
 import { useEffect, useRef } from "react";
 import { type Theme, useTheme } from "./theme";
@@ -76,9 +76,11 @@ function atlas(theme: Theme, cw: number, ch: number, dpr: number) {
   return canvas;
 }
 
-export function AsciiField() {
+/** `theme`: for a page with its own colours (the landing page is always white); otherwise it follows the app. */
+export function AsciiField({ theme: fixed }: { theme?: Theme }) {
   const ref = useRef<HTMLCanvasElement>(null);
-  const theme = useTheme();
+  const current = useTheme();
+  const theme = fixed ?? current;
 
   useEffect(() => {
     const canvas = ref.current;
@@ -163,22 +165,62 @@ export function AsciiField() {
 /** For pictures: a slightly heavier ramp, so dark and saturated parts read as dense type. */
 const PICTURE_RAMP = " .:-=+*#%";
 
+/** One image in a picture: a URL, or an SVG's markup (from `?raw`), and where it goes in the picture's own units. */
+export type PictureLayer = { src: string; box: [left: number, top: number, width: number, height: number] };
+
+/** SVG markup becomes an image at a size worth drawing; the files say 1em. */
+function imageUrl(src: string, width: number, height: number) {
+  if (!src.trimStart().startsWith("<svg")) return src;
+  const sized = src.replace(/\swidth="[^"]*"/, ` width="${Math.round(width)}"`).replace(/\sheight="[^"]*"/, ` height="${Math.round(height)}"`);
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(sized)}`;
+}
+
+function load(url: string) {
+  return new Promise<HTMLImageElement>((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = url;
+  });
+}
+
 /**
- * A picture through the ASCII filter, at low power: the picture stays,
- * softened, and every cell gets a character in that cell's own colour,
- * denser where the picture is darker or more saturated. So the agents keep
- * the faces people know them by. `strength` 0 is the plain picture, 1 is
- * type only. The characters type themselves in once, then it holds still.
+ * Pictures through the ASCII filter, at low power: the images stay, softened,
+ * and every cell gets a character in that cell's own colour, so the agents
+ * keep the faces people know them by. The layers are drawn as one scene, so
+ * the type lines up across them. On a dark page (`on="dark"`) the black parts
+ * are drawn in light grey type instead, or they'd vanish into the page.
+ * `strength` 0 is the plain picture, 1 is type only. The characters type
+ * themselves in once, then it holds still.
  */
-export function AsciiPicture({ src, ratio, alt, strength = 0.5, cell = 6, className }: { src: string; ratio: number; alt: string; strength?: number; cell?: number; className?: string }) {
+export function AsciiPicture({
+  layers,
+  size,
+  alt,
+  on = "light",
+  strength = 0.5,
+  cell = 6,
+  className,
+}: {
+  layers: PictureLayer[];
+  size: [width: number, height: number];
+  alt: string;
+  on?: "light" | "dark";
+  strength?: number;
+  cell?: number;
+  className?: string;
+}) {
   const ref = useRef<HTMLCanvasElement>(null);
+  const [width, height] = size;
 
   useEffect(() => {
     const canvas = ref.current;
     const ctx = canvas?.getContext("2d");
     if (!canvas || !ctx) return;
     const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const img = new Image();
+    const dark = on === "dark";
+    let images: HTMLImageElement[] = [];
+    const scene = document.createElement("canvas");
     let cells: Uint8ClampedArray | null = null;
     let cols = 0;
     let rows = 0;
@@ -188,8 +230,15 @@ export function AsciiPicture({ src, ratio, alt, strength = 0.5, cell = 6, classN
 
     const size = () => {
       const dpr = Math.min(2, window.devicePixelRatio || 1);
-      canvas.width = Math.round(canvas.clientWidth * dpr);
-      canvas.height = Math.round(canvas.clientHeight * dpr);
+      canvas.width = scene.width = Math.round(canvas.clientWidth * dpr);
+      canvas.height = scene.height = Math.round(canvas.clientHeight * dpr);
+      const scale = canvas.width / width;
+      const sctx = scene.getContext("2d")!;
+      sctx.clearRect(0, 0, scene.width, scene.height);
+      layers.forEach((layer, i) => {
+        const [left, top, w, h] = layer.box;
+        sctx.drawImage(images[i]!, left * scale, top * scale, w * scale, h * scale);
+      });
       // Finer type on a small picture, so it stays a texture rather than taking over.
       const unit = Math.max(3.5, Math.min(cell, canvas.clientWidth / 140));
       cw = unit * dpr;
@@ -200,10 +249,10 @@ export function AsciiPicture({ src, ratio, alt, strength = 0.5, cell = 6, classN
       const small = document.createElement("canvas");
       small.width = cols;
       small.height = rows;
-      const sctx = small.getContext("2d")!;
-      sctx.imageSmoothingQuality = "high";
-      sctx.drawImage(img, 0, 0, cols, rows);
-      cells = sctx.getImageData(0, 0, cols, rows).data;
+      const mctx = small.getContext("2d")!;
+      mctx.imageSmoothingQuality = "high";
+      mctx.drawImage(scene, 0, 0, cols, rows);
+      cells = mctx.getImageData(0, 0, cols, rows).data;
       font = `${unit * 1.5 * dpr}px "Geist Mono Variable", ui-monospace, Menlo, Consolas, monospace`;
     };
 
@@ -212,7 +261,7 @@ export function AsciiPicture({ src, ratio, alt, strength = 0.5, cell = 6, classN
       if (!cells) return;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.globalAlpha = (1 - 0.75 * strength) * Math.min(1, shown * 1.5);
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      ctx.drawImage(scene, 0, 0);
       ctx.globalAlpha = 1;
       ctx.font = font;
       ctx.textAlign = "center";
@@ -223,17 +272,31 @@ export function AsciiPicture({ src, ratio, alt, strength = 0.5, cell = 6, classN
           if (shown < 1 && hash(col, row) > shown) continue;
           const i = (row * cols + col) * 4;
           const a = cells[i + 3]! / 255;
-          if (a < 0.2) continue;
-          const r = cells[i]!;
-          const g = cells[i + 1]!;
-          const b = cells[i + 2]!;
+          // Cells the picture only half covers would float type past its edge.
+          if (a < 0.5) continue;
+          let r = cells[i]!;
+          let g = cells[i + 1]!;
+          let b = cells[i + 2]!;
           const light = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
           const vivid = (Math.max(r, g, b) - Math.min(r, g, b)) / 255;
-          const ink = a * Math.max(1 - light, vivid * 0.9);
+          let ink: number;
+          if (dark) {
+            // Bright and colourful parts in dense type; black parts sparse, in grey.
+            ink = a * Math.max(0.5, light * 0.9, vivid);
+            const lift = Math.max(0, (0.35 - light) / 0.35) * 0.9;
+            r += (176 - r) * lift;
+            g += (176 - g) * lift;
+            b += (184 - b) * lift;
+          } else {
+            ink = a * Math.max(1 - light, vivid * 0.9);
+            // A shade darker than the picture under it, so the type shows on its own colour.
+            r *= 0.8;
+            g *= 0.8;
+            b *= 0.8;
+          }
           const index = Math.round(ink * (PICTURE_RAMP.length - 1));
           if (!index) continue;
-          // A shade darker than the picture under it, so the type shows on its own colour.
-          ctx.fillStyle = `rgba(${r * 0.8}, ${g * 0.8}, ${b * 0.8}, ${alpha})`;
+          ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${alpha})`;
           ctx.fillText(PICTURE_RAMP[index]!, col * cw + cw / 2, row * ch + ch / 2);
         }
       }
@@ -251,29 +314,32 @@ export function AsciiPicture({ src, ratio, alt, strength = 0.5, cell = 6, classN
     };
 
     let ready = false;
+    let cancelled = false;
     const observer = new ResizeObserver(() => {
       if (!ready) return;
       size();
       draw(1);
     });
-    let cancelled = false;
-    img.onload = () => {
-      void Promise.race([document.fonts.load(`${cell * 1.5}px "Geist Mono Variable"`), new Promise((done) => setTimeout(done, 1_500))]).then(() => {
-        if (cancelled) return;
-        ready = true;
-        size();
-        if (still) draw(1);
-        else typeIn();
-      });
-    };
-    img.src = src;
+    // Drawn big enough for a 2x screen at the widest the picture gets.
+    const sharp = 2_000 / width;
+    void Promise.all([
+      Promise.all(layers.map((layer) => load(imageUrl(layer.src, layer.box[2] * sharp, layer.box[3] * sharp)))),
+      Promise.race([document.fonts.load(`${cell * 1.5}px "Geist Mono Variable"`), new Promise((done) => setTimeout(done, 1_500))]),
+    ]).then(([loaded]) => {
+      if (cancelled) return;
+      images = loaded;
+      ready = true;
+      size();
+      if (still) draw(1);
+      else typeIn();
+    });
     observer.observe(canvas);
     return () => {
       cancelled = true;
       cancelAnimationFrame(frame);
       observer.disconnect();
     };
-  }, [src, strength, cell]);
+  }, [layers, width, on, strength, cell]);
 
-  return <canvas ref={ref} role="img" aria-label={alt} className={className} style={{ display: "block", width: "100%", aspectRatio: String(ratio) }} />;
+  return <canvas ref={ref} role="img" aria-label={alt} className={className} style={{ display: "block", width: "100%", aspectRatio: `${width} / ${height}` }} />;
 }
