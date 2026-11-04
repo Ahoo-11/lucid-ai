@@ -60,6 +60,9 @@ const GROUPS: { id: Group; label: string; hint: string }[] = [
 /** Goes through the proxy without knowing which AI yet. */
 const asksProvider = (agent: AgentChoice) => agent.method === "proxy" && !agent.provider;
 const OTEL_CHOICE: AgentChoice = { id: "otel", name: "OpenTelemetry", brand: BRANDS.otel, method: "otel", group: "own" };
+
+/** What connects today, for the landing page: every agent here that isn't "soon", then OpenTelemetry. */
+export const CONNECTS_TODAY: Brand[] = [...AGENT_CHOICES, OTEL_CHOICE].flatMap((agent) => (agent.brand && !agent.soon ? [{ ...agent.brand, name: agent.name }] : []));
 /** Someone's own agent, with no name of its own: plain code, or anything sending OpenTelemetry. */
 const unnamed = (agent: AgentChoice) => agent.id === "custom" || agent.id === "otel";
 

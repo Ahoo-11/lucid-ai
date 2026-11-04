@@ -60,22 +60,6 @@ export const BRANDS = {
   github: { name: "GitHub", svg: github },
 } satisfies Record<string, Brand>;
 
-/** Only what connects today: native integrations, the proxy, and OpenTelemetry. */
-export const AGENTS: Brand[] = [BRANDS.claudeCode, BRANDS.hermes, BRANDS.langgraph, BRANDS.langchain, BRANDS.vercel, BRANDS.otel];
-export const PROVIDERS: Brand[] = [
-  BRANDS.meta,
-  BRANDS.openai,
-  BRANDS.anthropic,
-  BRANDS.gemini,
-  BRANDS.openrouter,
-  BRANDS.deepseek,
-  BRANDS.mistral,
-  BRANDS.groq,
-  BRANDS.xai,
-  BRANDS.together,
-  BRANDS.fireworks,
-];
-
 /** Gradient ids inside a logo would collide when it appears twice on a page, so each copy gets its own. */
 function uniqueIds(svg: string, suffix: string) {
   return svg.replace(/id="([^"]+)"/g, `id="$1${suffix}"`).replace(/url\(#([^)]+)\)/g, `url(#$1${suffix})`);

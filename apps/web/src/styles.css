@@ -69,6 +69,12 @@
     rotate: 360deg;
   }
 }
+/* The landing page's logo strip: the row is there twice, so half its width is one loop. */
+@keyframes marquee {
+  to {
+    translate: -50% 0;
+  }
+}
 /* A dialog or wizard step coming in. */
 @keyframes rise {
   from {
