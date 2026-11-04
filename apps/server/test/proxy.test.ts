@@ -91,7 +91,8 @@ describe("LLM proxy", () => {
     const call = (messages: unknown[]) =>
       app.request("/proxy/fake/v1/chat/completions", {
         method: "POST",
-        headers: { "content-type": "application/json", authorization: "Bearer sk-provider-key", "x-lucid-agent": "trip-planner" },
+        // PowerShell and .NET clients send `expect` on every POST.
+        headers: { "content-type": "application/json", authorization: "Bearer sk-provider-key", "x-lucid-agent": "trip-planner", expect: "100-continue" },
         body: JSON.stringify({ model: "test/model", messages, tools: TOOLS }),
       });
     const user = { role: "user", content: "Do I need an umbrella in Paris?" };

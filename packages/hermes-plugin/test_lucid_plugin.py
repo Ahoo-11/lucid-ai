@@ -56,9 +56,13 @@ class FakeCtx:
         self.hooks[name] = fn
 
 
-def load_plugin():
-    path = Path(__file__).parent / "lucid" / "__init__.py"
-    spec = importlib.util.spec_from_file_location("lucid_plugin_under_test", path)
+def load_plugin(home: Path):
+    """The plugin loaded from a copy in the test's folder, never the real files: a
+    plugin from an earlier test, still running, can take a later test's update
+    offer and would otherwise overwrite the plugin's own source."""
+    folder = home / "plugin-under-test"
+    shutil.copytree(Path(__file__).parent / "lucid", folder, ignore=shutil.ignore_patterns("__pycache__"))
+    spec = importlib.util.spec_from_file_location("lucid_plugin_under_test", folder / "__init__.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -94,7 +98,7 @@ class PluginTest(unittest.TestCase):
         ANSWER["status"] = 200
         os.environ.pop("LUCID_BACKFILL_DAYS", None)
         self.home = home = Path(tempfile.mkdtemp(prefix="lucid-hermes-"))
-        self.plugin = load_plugin()
+        self.plugin = load_plugin(home)
         # Pinned per loaded copy: sender threads of earlier tests keep running
         # and must not touch this test's folders.
         self.plugin._hermes_home = lambda: home
@@ -432,7 +436,10 @@ class PluginTest(unittest.TestCase):
         self.make_state_db(time.time())
         os.environ["LUCID_BACKFILL_DAYS"] = "7"
         self.plugin.register(FakeCtx())
-        self.assertTrue(self.wait_for(lambda: any(post["path"] == "/v1/imports/hermes" for post in RECEIVED)))
+        # The marker is written last, so waiting for it keeps this backfill's
+        # final progress report from reaching the next test.
+        self.assertTrue(self.wait_for(lambda: (self.home / "lucid-backfill.json").exists()))
+        self.assertTrue(any(post["path"] == "/v1/imports/hermes" for post in RECEIVED))
 
 
 if __name__ == "__main__":

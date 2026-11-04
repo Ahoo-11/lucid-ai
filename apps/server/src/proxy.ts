@@ -45,7 +45,12 @@ export function upstreams(): Record<string, string> {
 
 // Providers known to accept stream_options; used to ask for token usage on streams.
 const STREAM_USAGE_PROVIDERS = new Set(["openai", "openrouter", "groq", "deepseek", "together", "xai"]);
-const DROP_REQUEST_HEADERS = new Set(["host", "content-length", "connection", "keep-alive", "transfer-encoding", "accept-encoding", "cookie", "x-lucid-key"]);
+// Hop-by-hop headers stay here. Node's fetch also refuses `expect`, which
+// PowerShell and .NET send on every POST, so forwarding it fails the call.
+const DROP_REQUEST_HEADERS = new Set([
+  "host", "content-length", "connection", "keep-alive", "transfer-encoding", "expect", "upgrade", "te", "trailer",
+  "proxy-connection", "proxy-authorization", "accept-encoding", "cookie", "x-lucid-key",
+]);
 const DROP_RESPONSE_HEADERS = new Set(["content-encoding", "content-length", "transfer-encoding", "connection", "keep-alive"]);
 const MAX_BODY = 32 * 1024 * 1024;
 
