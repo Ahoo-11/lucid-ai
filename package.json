@@ -3,22 +3,24 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "license": "MIT",
   "workspaces": [
     "apps/*",
     "packages/*"
   ],
   "scripts": {
+    "start": "npm run build && npm run start -w @lucid/server",
     "dev": "concurrently -n server,web -c blue,magenta \"npm run dev -w @lucid/server\" \"npm run dev -w @lucid/web\"",
     "dev:server": "npm run dev -w @lucid/server",
     "dev:web": "npm run dev -w @lucid/web",
-    "build": "npm run build -w @lucid/web",
+    "build": "npm run build -w @lucid/web && npm run build -w @lucid/cli",
     "db:generate": "npm run db:generate -w @lucid/server",
     "lucid": "tsx packages/cli/src/index.ts",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.12"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",

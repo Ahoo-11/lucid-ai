@@ -191,8 +191,8 @@ export function NewExperiment() {
   useEffect(() => {
     if (!judge && models.data?.suggestedJudge) setJudge(models.data.suggestedJudge);
   }, [models.data, judge]);
-  // A key for one model (Muse Spark on Baseten): it's the challenger, so fill it in.
-  const onlyModel = models.data?.provider === "baseten" && models.data.models.length === 1 ? models.data.models[0]!.id : null;
+  // A key used with one model (Muse Spark, from Meta or Baseten): it's the challenger, so fill it in.
+  const onlyModel = (models.data?.provider === "meta" || models.data?.provider === "baseten") && models.data.models.length === 1 ? models.data.models[0]!.id : null;
   useEffect(() => {
     if (onlyModel) setVariants((all) => (all.length === 1 && !all[0]!.model ? [{ ...all[0]!, model: onlyModel }] : all));
   }, [onlyModel]);
@@ -284,7 +284,7 @@ export function NewExperiment() {
                     {price.name}
                     {price.inputPerMillion != null && price.outputPerMillion != null
                       ? ` · $${price.inputPerMillion.toFixed(2)} / $${price.outputPerMillion.toFixed(2)} per million tokens in / out`
-                      : " · runs on your Baseten credits"}
+                      : ` · runs on your ${models.data?.provider === "meta" ? "Meta" : "Baseten"} key`}
                   </div>
                 )}
                 {variant.model.trim() && !price && models.data?.models.length ? <div className="text-xs text-amber-600">Not in the tool-capable model list; it may not support tools.</div> : null}

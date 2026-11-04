@@ -28,7 +28,9 @@ export const DEFAULT_UPSTREAMS: Record<string, string> = {
   xai: "https://api.x.ai",
   fireworks: "https://api.fireworks.ai/inference",
   gemini: "https://generativelanguage.googleapis.com/v1beta/openai",
-  // Meta's Muse Spark (meta-models/muse-spark-open-1026) and other open models.
+  // Meta's Model API: Muse Spark (muse-spark-1.3, muse-spark-1.1).
+  meta: "https://api.meta.ai",
+  // Muse Spark (meta-models/muse-spark-open-1026) and other open models, on Baseten.
   baseten: "https://inference.baseten.co",
 };
 

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createApp } from "../src/app";
 import type { AppContext } from "../src/context";
 import { openDb } from "../src/db";
-import type { ChatClient, ChatRequest } from "../src/ee/arena/llm";
+import type { ChatClient, ChatRequest } from "../src/arena/llm";
 import { ensureDefaultProject } from "../src/keys";
 import { LiveHub } from "../src/live";
 

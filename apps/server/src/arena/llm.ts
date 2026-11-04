@@ -32,6 +32,8 @@ export type ChatDefaults = {
    */
   minMaxTokens?: number;
   reasoningEffort?: ChatRequest["reasoningEffort"];
+  /** Only for these models (a client that reaches many, like OpenRouter); every request when unset. */
+  forModels?: RegExp;
 };
 
 export type ChatResult = {
@@ -61,9 +63,9 @@ export function openAICompatibleClient(options: { apiKey: string; baseUrl?: stri
   const fetchImpl = options.fetchImpl ?? fetch;
   // OpenRouter has its own spelling for reasoning and cost; everyone else takes the standard one.
   const openRouter = /openrouter\.ai/.test(baseUrl);
-  const defaults = options.defaults ?? {};
   return async (request, signal) => {
     const started = Date.now();
+    const defaults = options.defaults && (!options.defaults.forModels || options.defaults.forModels.test(request.model)) ? options.defaults : {};
     const maxTokens = defaults.minMaxTokens ? Math.max(request.maxTokens ?? 0, defaults.minMaxTokens) : request.maxTokens;
     const effort = request.reasoningEffort ?? defaults.reasoningEffort;
     const response = await fetchImpl(`${baseUrl}/chat/completions`, {

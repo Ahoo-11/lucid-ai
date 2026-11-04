@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { judgePair, parseVerdict } from "../src/ee/arena/judge";
-import type { ChatClient } from "../src/ee/arena/llm";
-import { bradleyTerry, standings } from "../src/ee/arena/ratings";
-import { decisionRequest, toChatMessages, toChatTools, withSystemPrompt } from "../src/ee/arena/request";
+import { judgePair, parseVerdict } from "../src/arena/judge";
+import type { ChatClient } from "../src/arena/llm";
+import { bradleyTerry, standings } from "../src/arena/ratings";
+import { decisionRequest, toChatMessages, toChatTools, withSystemPrompt } from "../src/arena/request";
 
 describe("ratings", () => {
   it("orders a clear chain A > B > C and keeps ratings finite", () => {

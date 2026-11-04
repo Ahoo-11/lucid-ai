@@ -259,7 +259,8 @@ export type Issue = {
 };
 
 /** One past decision replayed with the fix: did the agent avoid the problem? */
-export type FixTestResult = { runId: string; runName: string | null; pass: boolean; reason: string; decision: string };
+/** `rebuilt`: the run's request wasn't captured whole, so the replay used its chat as recorded. */
+export type FixTestResult = { runId: string; runName: string | null; pass: boolean; reason: string; decision: string; rebuilt?: boolean };
 
 type TestedFix = {
   /** The words tested: Muse Spark's rewrite when the first version failed (that one is in revisedFrom). */
@@ -352,7 +353,7 @@ export type DeviceLink =
   | { code: string; status: "taken" }
   | { code: string; status: "pending" | "approved" | "claimed" | "denied" | "expired"; machine: string; os: string | null; agents: string[]; expiresAt: string };
 
-/** Prices are null for a model on prepaid credits (Muse Spark on Baseten). */
+/** Prices are null for the one model a key is used with (Muse Spark, from Meta or Baseten). */
 export type ArenaModel = { id: string; name: string; inputPerMillion: number | null; outputPerMillion: number | null; contextLength: number | null };
 export type ToolCall = { id?: string; name: string; input?: unknown };
 export type Output = { text?: string; toolCalls?: ToolCall[] };

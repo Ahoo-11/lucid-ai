@@ -1,6 +1,6 @@
 import { Hono } from "hono";
-import type { AppContext, AppEnv } from "../../context";
-import { pricingCatalog } from "../../pricing";
+import type { AppContext, AppEnv } from "../context";
+import { pricingCatalog } from "../pricing";
 import {
   ArenaError,
   type VariantInput,
@@ -28,10 +28,11 @@ export function arenaRoutes(ctx: AppContext) {
   });
 
   app.get("/models", (c) => {
-    // A key for one model (Baseten's Muse Spark on the Meta hackathon credits):
-    // that model is the challenger and the judge.
+    // A key used with one model (Muse Spark, from Meta or Baseten): that
+    // model is the challenger and the judge.
     if (ctx.ai?.onlyModel && ctx.ai.model) {
-      const only = { id: ctx.ai.model, name: /muse-spark/i.test(ctx.ai.model) ? "Muse Spark (Meta, on Baseten)" : ctx.ai.model, inputPerMillion: null, outputPerMillion: null, contextLength: null };
+      const name = /muse-spark/i.test(ctx.ai.model) ? `Muse Spark (${ctx.ai.provider === "baseten" ? "Meta, on Baseten" : "Meta"})` : ctx.ai.model;
+      const only = { id: ctx.ai.model, name, inputPerMillion: null, outputPerMillion: null, contextLength: null };
       return c.json({ configured: !!ctx.chat, models: [only], suggestedJudge: only.id, provider: ctx.ai.provider });
     }
     const catalog = pricingCatalog() ?? {};

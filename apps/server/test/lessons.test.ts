@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createApp } from "../src/app";
 import type { AppContext } from "../src/context";
-import { openDb, schema } from "../src/db";
+import { openDb } from "../src/db";
 import { ensureDefaultProject } from "../src/keys";
 import { LiveHub } from "../src/live";
 
@@ -28,18 +28,12 @@ async function setup() {
       ],
     });
   const issues = async () => (await call("GET", "/api/issues")).body.issues as Issue[];
-  // What a passed fix test leaves behind (fixtest.test.ts runs real ones).
-  const passTest = (issueId: string, lesson: string) =>
-    db
-      .insert(schema.fixTests)
-      .values({ projectId, issueId, lesson, status: "passed" })
-      .onConflictDoUpdate({ target: [schema.fixTests.projectId, schema.fixTests.issueId], set: { lesson, status: "passed" } });
-  return { call, blockedTurn, issues, passTest };
+  return { call, blockedTurn, issues };
 }
 
 describe("lessons: fix it, with the owner's approval", () => {
   it("goes to the agent's plugin once approved, and counts what happens since", async () => {
-    const { call, blockedTurn, issues, passTest } = await setup();
+    const { call, blockedTurn, issues } = await setup();
     const past = Date.now() / 1000 - 3_600;
     await blockedTurn("t1", past);
     await blockedTurn("t2", past + 60);
@@ -49,12 +43,7 @@ describe("lessons: fix it, with the owner's approval", () => {
     // Nothing reaches the agent before the owner approves.
     expect((await call("GET", "/v1/lessons?harness=hermes")).body).toEqual({ lessons: [] });
 
-    // Nor before the fix passed a test of exactly these words.
-    const untested = await call("POST", `/api/issues/${issue.id}/lesson`, { text: "When running as a cron job, never use execute_code." });
-    expect(untested.status).toBe(409);
-    expect(untested.body.error).toMatch(/Test this fix first/);
-    await passTest(issue.id, "When running as a cron job, never use execute_code.");
-
+    // Approving sends it, tested or not: testing a fix first is optional.
     const applied = await call("POST", `/api/issues/${issue.id}/lesson`, { text: "  When running as a cron job,\n never use execute_code.  " });
     expect(applied.status).toBe(201);
     const lesson = applied.body.lesson as Lesson;
@@ -76,10 +65,8 @@ describe("lessons: fix it, with the owner's approval", () => {
     expect((await call("GET", "/v1/lessons?harness=hermes")).body).toEqual({ lessons: [] });
     expect((await call("POST", `/api/lessons/${lesson.id}/on`, {})).body.lesson).toMatchObject({ status: "active", deliveredAt: null });
 
-    // A new lesson for the same problem replaces the old one, once it passed its own test.
-    expect((await call("POST", `/api/issues/${issue.id}/lesson`, { text: "Use only approved tools in cron runs." })).status).toBe(409);
-    await passTest(issue.id, "Use only approved tools in cron runs.");
-    const second =(await call("POST", `/api/issues/${issue.id}/lesson`, { text: "Use only approved tools in cron runs." })).body.lesson as Lesson;
+    // A new lesson for the same problem replaces the old one.
+    const second = (await call("POST", `/api/issues/${issue.id}/lesson`, { text: "Use only approved tools in cron runs." })).body.lesson as Lesson;
     expect((await call("GET", "/v1/lessons?harness=hermes")).body).toEqual({ lessons: [{ id: second.id, text: "Use only approved tools in cron runs." }] });
   });
 

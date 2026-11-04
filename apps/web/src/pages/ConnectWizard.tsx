@@ -786,8 +786,9 @@ const WhatChanges = () => (
 
 /** `base`: what goes after the provider to make the base URL its own SDK expects. */
 const PROVIDERS: Record<string, { label: string; brand: Brand; base: string; keyVar: string; model: string; anthropic?: boolean; /** Whose API key it is, when not the label's. */ company?: string }> = {
-  // Meta's Muse Spark, served by Baseten. First: it's the hackathon's model.
-  baseten: { label: "Muse Spark", company: "Baseten", brand: BRANDS.meta, base: "/v1", keyVar: "BASETEN_API_KEY", model: "meta-models/muse-spark-open-1026" },
+  // Meta's Muse Spark first: on Meta's own Model API, then served by Baseten.
+  meta: { label: "Muse Spark", company: "Meta", brand: BRANDS.meta, base: "/v1", keyVar: "META_API_KEY", model: "muse-spark-1.3" },
+  baseten: { label: "Muse Spark (Baseten)", company: "Baseten", brand: BRANDS.meta, base: "/v1", keyVar: "BASETEN_API_KEY", model: "meta-models/muse-spark-open-1026" },
   openai: { label: "OpenAI", brand: BRANDS.openai, base: "/v1", keyVar: "OPENAI_API_KEY", model: "gpt-4o-mini" },
   anthropic: { label: "Anthropic", brand: BRANDS.anthropic, base: "", keyVar: "ANTHROPIC_API_KEY", model: "claude-haiku-4-5", anthropic: true },
   openrouter: { label: "OpenRouter", brand: BRANDS.openrouter, base: "/v1", keyVar: "OPENROUTER_API_KEY", model: "openai/gpt-4o-mini" },
@@ -800,7 +801,7 @@ const PROVIDERS: Record<string, { label: string; brand: Brand; base: string; key
   fireworks: { label: "Fireworks", brand: BRANDS.fireworks, base: "/v1", keyVar: "FIREWORKS_API_KEY", model: "accounts/fireworks/models/llama-v3p3-70b-instruct" },
 };
 
-/** Muse Spark first (the hackathon's model), then the order above; providers a server added go last. */
+/** In the order above, Muse Spark first; providers a server added go last. */
 const providerRank = (id: string) => {
   const at = Object.keys(PROVIDERS).indexOf(id);
   return at === -1 ? Number.MAX_SAFE_INTEGER : at;

@@ -4,7 +4,7 @@
 // GitHub star count.
 
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, ArrowRight, Check, ChevronDown, ChevronsRight, FlaskConical, Lightbulb, Sparkles, Star } from "lucide-react";
+import { AlertTriangle, ArrowRight, Check, ChevronDown, ChevronsRight, FlaskConical, Lightbulb, Plus, Sparkles, Star } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { Link } from "react-router";
 import { AsciiField, AsciiPicture, type PictureLayer } from "../ascii";
@@ -18,7 +18,7 @@ import grokbot from "./agents/grokbot.svg?raw";
 import jolly from "./agents/jolly.webp";
 import openclaw from "./agents/openclaw.svg?raw";
 import hermes from "./logos/hermesagent.svg?raw";
-import { HeroDemo } from "./HeroDemo";
+import { HeroDemo, WindowDots } from "./HeroDemo";
 import { CONNECTS_TODAY } from "../pages/ConnectWizard";
 import { BRANDS, type Brand, BrandMark } from "./logos";
 
@@ -37,7 +37,7 @@ export function Landing() {
   return (
     // Its own stacking context, so the ASCII field sits above the page colour and under everything else.
     <div className="relative isolate min-h-dvh overflow-x-clip bg-paper text-zinc-900">
-      <AsciiField theme="light" />
+      <AsciiField theme="light" scrolls />
       <Nav stars={stars} />
       <main>
         <Hero stars={stars} />
@@ -176,7 +176,7 @@ function Hero({ stars }: { stars: number | null }) {
           className="inline-flex items-center gap-2 rounded-full bg-zinc-900/[0.04] py-1 pr-3 pl-1 text-xs text-zinc-700 ring-1 ring-zinc-900/10 transition hover:ring-zinc-900/25"
         >
           <span className="rounded-full bg-brand-300 px-2 py-0.5 font-semibold text-zinc-950">Open source</span>
-          MIT core, self-host with Docker
+          MIT licensed, self-host with Docker
           <ArrowRight className="size-3.5 text-zinc-500" />
         </a>
         <h1 className="mx-auto mt-7 max-w-5xl font-display text-[2.6rem] font-bold leading-[1.05] tracking-[-0.035em] text-balance text-zinc-950 sm:text-6xl lg:text-[4.75rem]">
@@ -195,7 +195,7 @@ function Hero({ stars }: { stars: number | null }) {
           <GitHubButton stars={stars} />
         </div>
         <ul className="mt-5 flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-xs text-zinc-500">
-          {["Free while in beta", "MIT-licensed core", "Provider keys never stored"].map((item) => (
+          {["Free while in beta", "MIT licensed", "Provider keys never stored"].map((item) => (
             <li key={item} className="flex items-center gap-1.5">
               <Check className="size-3.5 text-brand-700" />
               {item}
@@ -203,29 +203,28 @@ function Hero({ stars }: { stars: number | null }) {
           ))}
         </ul>
         <AgentLineup />
-        <LogoWall />
       </div>
-      <div className="relative mx-auto max-w-6xl px-4 pt-16 pb-24 sm:px-6">
+      <LogoBand />
+      <div className="relative mx-auto max-w-6xl px-4 pt-16 pb-24 sm:px-6 sm:pt-20">
         <HeroDemo />
       </div>
     </section>
   );
 }
 
-
-
 /**
  * The agents people know by their faces, standing together as they do in
  * their own marketing: OpenClaw's Molty, Meta Muse's Jolly, Hermes Agent,
  * Grok Bot and OpenAI's dots (Todd, Iggy, Felipe, Alfred). Back to front, in
- * a 865 by 264 picture. Molty and Hermes stand over Jolly's edges.
+ * a 865 by 264 picture. Molty and Hermes stand over Jolly's edges, and
+ * Molty's claw hides a bite the screenshot left in Jolly's side.
  * Sources: Molty and Grok Bot from Lobe Icons (MIT), like the logos; the dots
  * from OpenAI's "Introducing dots" page; Jolly cut from a screenshot, as Meta
  * publishes no plain file of it.
  */
 const LINEUP: PictureLayer[] = [
-  { src: jolly, box: [143, 5, 162, 255] },
-  { src: openclaw, box: [2, 46, 186, 186] },
+  { src: jolly, box: [143, 29, 149, 235] },
+  { src: openclaw, box: [2, 68, 186, 186] },
   { src: grokbot, box: [435, 52, 212, 212] },
   { src: hermes, box: [272, 50, 205, 205] },
   { src: todd, box: [627, 64, 118, 118] },
@@ -234,27 +233,29 @@ const LINEUP: PictureLayer[] = [
   { src: alfred, box: [738, 134, 124, 124] },
 ];
 
-/** The lineup through Lucid's ASCII filter, at low power, straight on the page. */
+/** The lineup through Lucid's ASCII filter, at low power, straight on the page. They stand on the logo band's top line. */
 function AgentLineup() {
   return (
-    <div className="mx-auto mt-16 max-w-4xl">
+    <div className="mx-auto mt-14 max-w-4xl sm:mt-16">
       <AsciiPicture layers={LINEUP} size={[865, 264]} alt="OpenClaw, Meta Muse, Hermes Agent, Grok Bot and OpenAI's dots" />
     </div>
   );
 }
 
-
-function LogoWall() {
+/** What connects today, as a band across the page between the hero and the demo. */
+function LogoBand() {
   return (
-    <div className="mx-auto mt-16 max-w-5xl">
-      <p className="text-sm text-zinc-600">Plugs into the agents you already use</p>
-      <div className="mt-6 flex items-center gap-4 sm:gap-6">
-        <span className="shrink-0 rounded-full bg-white px-3 py-1.5 font-mono text-[11px] font-medium tracking-[0.06em] text-zinc-600 uppercase shadow-[0_1px_2px_rgba(24,24,27,0.05)] ring-1 ring-zinc-900/10">
-          Works with
-        </span>
-        <LogoStrip brands={CONNECTS_TODAY} />
+    <div>
+      <div className="border-y border-zinc-900/[0.08] bg-white">
+        <div className="mx-auto flex max-w-6xl flex-col items-center gap-3 px-4 py-5 sm:flex-row sm:gap-6 sm:px-6">
+          <p className="shrink-0 text-center text-sm leading-snug sm:border-r sm:border-zinc-900/[0.08] sm:pr-6 sm:text-left">
+            <span className="font-medium text-zinc-950">Works with</span>
+            <span className="text-zinc-500 sm:block"> the agents you already use</span>
+          </p>
+          <LogoStrip brands={CONNECTS_TODAY} />
+        </div>
       </div>
-      <p className="mt-6 text-xs text-zinc-500">…and anything that speaks OpenTelemetry or an OpenAI-style API.</p>
+      <p className="mt-4 px-4 text-center text-xs text-balance text-zinc-500">…and anything that speaks OpenTelemetry or an OpenAI-style API.</p>
     </div>
   );
 }
@@ -266,7 +267,7 @@ function LogoWall() {
  */
 function LogoStrip({ brands }: { brands: Brand[] }) {
   return (
-    <div className="min-w-0 flex-1 overflow-hidden [mask-image:linear-gradient(to_right,transparent,black_8%,black_92%,transparent)] motion-reduce:overflow-x-auto">
+    <div className="w-full min-w-0 flex-1 overflow-hidden [mask-image:linear-gradient(to_right,transparent,black_8%,black_92%,transparent)] motion-reduce:overflow-x-auto">
       <div className="flex w-max motion-safe:animate-[marquee_50s_linear_infinite] hover:[animation-play-state:paused]">
         {[0, 1].map((copy) => (
           <ul key={copy} aria-hidden={copy === 1 || undefined} className={cx("flex shrink-0 items-center py-2", copy === 1 && "motion-reduce:hidden")}>
@@ -349,7 +350,10 @@ function FeatureRow({ step, title, text, points, visual, flip }: { step: string;
 function MockFrame({ children, label }: { children: ReactNode; label: string }) {
   return (
     <div className="rounded-2xl bg-zinc-900 p-1.5 shadow-xl shadow-zinc-900/15 ring-1 ring-zinc-900">
-      <div className="px-3 py-2 text-[11px] text-zinc-500">{label}</div>
+      <div className="flex items-center gap-3 px-3 py-2">
+        <WindowDots />
+        <span className="min-w-0 truncate text-[11px] text-zinc-500">{label}</span>
+      </div>
       <div className="rounded-xl bg-zinc-950 p-5 ring-1 ring-white/5">{children}</div>
     </div>
   );
@@ -361,7 +365,7 @@ function MockLabel({ children }: { children: ReactNode }) {
 
 function StoryMock() {
   return (
-    <MockFrame label="Runs › Fix the failing login test › Step 2">
+    <MockFrame label="Sessions › Fix the failing login test › Step 2">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-400">
         <span className="flex size-6 items-center justify-center rounded-md bg-brand-300/10 text-brand-300">
           <Sparkles className="size-3.5" />
@@ -512,7 +516,7 @@ const FAQ = [
   },
   {
     q: "Is it free?",
-    a: "Hosted Lucid is free while it's in beta. The core is open source under MIT, so self-hosting costs nothing but your server.",
+    a: "Hosted Lucid is free while it's in beta. Lucid is open source under the MIT license, so self-hosting costs nothing but your server.",
   },
   {
     q: "Can I self-host it?",
@@ -523,19 +527,27 @@ const FAQ = [
 function Faq() {
   return (
     <section id="faq" className="scroll-mt-20 border-t border-zinc-900/5 py-24 sm:py-32">
-      <div className="mx-auto max-w-3xl px-4 sm:px-6">
-        <div className="text-center">
+      <div className="mx-auto grid max-w-6xl gap-12 px-4 sm:px-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] lg:gap-16">
+        <div className="text-center lg:sticky lg:top-28 lg:self-start lg:text-left">
           <Eyebrow>02 · FAQ</Eyebrow>
           <SectionTitle>Questions, answered</SectionTitle>
+          <p className="mt-5 text-zinc-600">
+            Something else?{" "}
+            <a href={`${GITHUB_URL}/issues`} target="_blank" rel="noreferrer" className="font-medium text-zinc-950 underline decoration-zinc-900/25 underline-offset-4 transition hover:decoration-zinc-900">
+              Ask on GitHub
+            </a>
+          </p>
         </div>
-        <div className="mt-12 divide-y divide-zinc-900/[0.07] rounded-2xl bg-white ring-1 ring-zinc-900/[0.07]">
+        <div className="divide-y divide-zinc-900/[0.07] rounded-2xl bg-white ring-1 ring-zinc-900/[0.07]">
           {FAQ.map((item) => (
             <details key={item.q} className="group px-5 sm:px-6">
               <summary className="flex cursor-pointer list-none items-center justify-between gap-4 py-5 font-medium text-zinc-950 [&::-webkit-details-marker]:hidden">
                 {item.q}
-                <ChevronDown className="size-5 shrink-0 text-zinc-500 transition-transform group-open:rotate-180" />
+                <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-zinc-900/[0.04] text-zinc-600 transition group-open:rotate-45 group-open:bg-zinc-900 group-open:text-white group-hover:bg-zinc-900/[0.08] group-open:group-hover:bg-zinc-900">
+                  <Plus className="size-4" />
+                </span>
               </summary>
-              <p className="pb-5 text-zinc-600">{item.a}</p>
+              <p className="-mt-1 pr-10 pb-5 leading-relaxed text-zinc-600">{item.a}</p>
             </details>
           ))}
         </div>
@@ -549,20 +561,21 @@ function Faq() {
 
 function FinalCta({ stars }: { stars: number | null }) {
   return (
-    <section className="relative overflow-hidden border-t border-zinc-900/5 py-24 sm:py-32">
-
-      <div className="relative mx-auto grid max-w-6xl items-center gap-14 px-4 sm:px-6 lg:grid-cols-2">
-        <div className="text-center lg:text-left">
-          <h2 className="font-display text-4xl font-bold leading-[1.05] tracking-[-0.03em] text-balance text-zinc-950 sm:text-6xl">
-            Stop guessing why your agent <span className="text-brand-700">failed.</span>
-          </h2>
-          <p className="mx-auto mt-6 max-w-md text-zinc-600 sm:text-lg lg:mx-0">Connect your first agent in a minute. Free while in beta, open source for good.</p>
-          <div className="mt-9 flex flex-col items-center gap-3 sm:flex-row sm:justify-center lg:justify-start">
-            <StartFree />
-            <GitHubButton stars={stars} />
+    <section className="border-t border-zinc-900/5 pt-24 pb-16 sm:pt-32 sm:pb-24">
+      <div className="mx-auto max-w-6xl px-4 sm:px-6">
+        <div className="grid items-center gap-12 overflow-hidden rounded-[2rem] bg-white px-6 py-12 ring-1 ring-zinc-900/[0.07] sm:p-12 lg:grid-cols-2 xl:p-16">
+          <div className="text-center lg:text-left">
+            <h2 className="font-display text-4xl font-bold leading-[1.05] tracking-[-0.03em] text-balance text-zinc-950 sm:text-6xl">
+              Stop guessing why your agent <span className="text-brand-700">failed.</span>
+            </h2>
+            <p className="mx-auto mt-6 max-w-md text-zinc-600 sm:text-lg lg:mx-0">Connect your first agent in a minute. Free while in beta, open source for good.</p>
+            <div className="mt-9 flex flex-col items-center gap-3 sm:flex-row sm:justify-center lg:justify-start">
+              <StartFree />
+              <GitHubButton stars={stars} />
+            </div>
           </div>
+          <Orbit />
         </div>
-        <Orbit />
       </div>
     </section>
   );
@@ -571,7 +584,11 @@ function FinalCta({ stars }: { stars: number | null }) {
 /** Lucid in the middle, and around it everything that connects today. */
 function Orbit() {
   return (
-    <div aria-hidden className="relative mx-auto size-[19rem] [--outer:9.5rem] sm:size-[26rem] sm:[--outer:13rem]">
+    // Sized so the logo tiles, which stick out past the ring, stay inside the card at every width.
+    <div
+      aria-hidden
+      className="relative mx-auto size-[15rem] [--outer:7.5rem] sm:size-[24rem] sm:[--outer:12rem] lg:size-[22rem] lg:[--outer:11rem] xl:size-[24rem] xl:[--outer:12rem]"
+    >
       <div className="absolute inset-0 rounded-full border border-zinc-900/[0.07]" />
       <div className="absolute inset-[19%] rounded-full border border-dashed border-zinc-900/[0.08]" />
       <Ring brands={CONNECTS_TODAY} radius="var(--outer)" className="motion-safe:animate-[orbit_90s_linear_infinite]" tileClass="motion-safe:animate-[orbit_90s_linear_infinite_reverse]" />
@@ -639,7 +656,7 @@ function Footer() {
           </FooterColumn>
         </div>
       </div>
-      <div className="mx-auto mt-10 max-w-6xl px-4 text-xs text-zinc-400 sm:px-6">© {new Date().getFullYear()} Lucid · MIT-licensed core</div>
+      <div className="mx-auto mt-10 max-w-6xl px-4 text-xs text-zinc-400 sm:px-6">© {new Date().getFullYear()} Lucid · MIT licensed</div>
     </footer>
   );
 }

@@ -191,7 +191,8 @@ export const runFindings = pgTable(
 );
 
 /** One replayed decision in a fix test: did the agent, with the fix, avoid the problem? */
-export type FixTestResult = { runId: string; runName: string | null; pass: boolean; reason: string; decision: string };
+/** `rebuilt`: the run's request wasn't captured whole, so the replay used its chat as recorded, without the agent's own instructions. */
+export type FixTestResult = { runId: string; runName: string | null; pass: boolean; reason: string; decision: string; rebuilt?: boolean };
 
 /**
  * The latest test of a fix for an Inbox problem: decisions where it went

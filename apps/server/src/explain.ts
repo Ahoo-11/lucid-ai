@@ -11,7 +11,7 @@
 // diagnosis is ready, and when it fails.
 
 import { and, count, desc, eq, gt, inArray, isNull, lte } from "drizzle-orm";
-import type { ChatClient } from "./ee/arena/llm";
+import type { ChatClient } from "./arena/llm";
 import type { AppContext } from "./context";
 import { schema } from "./db";
 import type { Hint } from "./insights";

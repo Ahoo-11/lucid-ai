@@ -7,9 +7,10 @@ import { Hono, type MiddlewareHandler } from "hono";
 import { streamSSE } from "hono/streaming";
 import type { AppContext, AppEnv } from "../context";
 import { type CallInput, contextBreakdown, rebuildMessages } from "../contextBreakdown";
+import { conversationOf } from "../conversation";
 import { schema } from "../db";
 import { CLOSED, resolveAccount } from "../auth";
-import { arenaRoutes } from "../ee/arena/routes";
+import { arenaRoutes } from "../arena/routes";
 import { createExplainer } from "../explain";
 import { createFixTester, failingDecisions } from "../fixtest";
 import { AFFECTED_MAX, type CauseOf, createReviewer } from "../review";
@@ -27,14 +28,11 @@ import { currentSyncs } from "../syncs";
 import { writeBatch } from "../writer";
 
 const { apiKeys, blobs, fixTests, ignoredIssues, issueExplanations, lessons, projects, rawEvents, runs, sessions, steps } = schema;
-const UNTESTED = "Test this fix first: Lucid applies a fix only after it passes a test on past runs.";
 const STATUSES = new Set(["ok", "error", "running"]);
 /** The Spend view's periods, in days. */
 const USAGE_DAYS = new Set([1, 7, 30]);
 /** A run's context breakdown reads every call's messages; past this many calls the rest go unsplit. */
 const CONTEXT_MAX_CALLS = 500;
-/** Earlier runs of a session read to rebuild a call's chat: agents compact long chats, so older turns weren't in the prompt anyway. */
-const REBUILD_TURNS = 20;
 
 const tokensIn = (step: { inputTokens: number | null; cacheReadTokens: number | null; cacheWriteTokens: number | null }) =>
   (step.inputTokens ?? 0) + (step.cacheReadTokens ?? 0) + (step.cacheWriteTokens ?? 0);
@@ -356,7 +354,7 @@ export function apiRoutes(ctx: AppContext) {
     }
     // Calls whose messages never came (Hermes cuts big requests to a preview; its history keeps none): rebuilt from the chat.
     if (calls.some((call) => !call.messages?.length)) {
-      const rebuilt = rebuildMessages(await conversationOf(projectId, run));
+      const rebuilt = rebuildMessages(await conversationOf(db, projectId, run));
       for (const call of calls) {
         const messages = call.messages?.length ? undefined : rebuilt.get(call.stepId);
         if (messages?.length) Object.assign(call, { messages, rebuilt: true });
@@ -364,55 +362,6 @@ export function apiRoutes(ctx: AppContext) {
     }
     return c.json(contextBreakdown(calls, run.input));
   });
-
-  /**
-   * A run's chat as recorded, for rebuilding what its model calls were sent:
-   * the last REBUILD_TURNS runs of its session before it, then itself, each
-   * with its steps in order and their full inputs and outputs.
-   */
-  async function conversationOf(projectId: string, run: { id: string; input: string | null; sessionId: string | null; startedAt: Date | null }) {
-    const earlier =
-      run.sessionId && run.startedAt
-        ? await db
-            .select({ id: runs.id, input: runs.input })
-            .from(runs)
-            .where(and(eq(runs.projectId, projectId), eq(runs.sessionId, run.sessionId), lt(runs.startedAt, run.startedAt)))
-            .orderBy(desc(runs.startedAt))
-            .limit(REBUILD_TURNS)
-        : [];
-    const turns = [...earlier.reverse(), run];
-    const rows = await db
-      .select({
-        runId: steps.runId,
-        externalId: steps.externalId,
-        parentExternalId: steps.parentExternalId,
-        kind: steps.kind,
-        toolName: steps.toolName,
-        toolCallId: steps.toolCallId,
-        inputHash: steps.inputHash,
-        outputHash: steps.outputHash,
-      })
-      .from(steps)
-      .where(inArray(steps.runId, turns.map((turn) => turn.id)))
-      .orderBy(sql`${steps.startedAt} asc nulls last`, asc(steps.seq), asc(steps.createdAt));
-    // Replies and tool results, and a sub-agent's task: stored whole, as text or JSON.
-    const keys = [...new Set(rows.flatMap((row) => [row.outputHash, row.kind === "agent" ? row.inputHash : null]).filter((key): key is string => !!key))];
-    const content = new Map<string, unknown>();
-    for (let i = 0; i < keys.length; i += 200) {
-      const found = await db
-        .select({ hash: blobs.hash, content: blobs.content })
-        .from(blobs)
-        .where(and(eq(blobs.projectId, projectId), inArray(blobs.hash, keys.slice(i, i + 200))));
-      for (const blob of found) content.set(blob.hash, parseJson(blob.content) ?? blob.content);
-    }
-    const of = (key: string | null) => (key ? content.get(key) : undefined);
-    return turns.map((turn) => ({
-      input: turn.input,
-      steps: rows
-        .filter((row) => row.runId === turn.id)
-        .map((row) => ({ stepId: row.externalId, parentId: row.parentExternalId, kind: row.kind, toolName: row.toolName, toolCallId: row.toolCallId, input: of(row.inputHash), output: of(row.outputHash) })),
-    }));
-  }
 
   /**
    * Failed steps grouped by what failed and how, most runs first, with the
@@ -694,6 +643,7 @@ export function apiRoutes(ctx: AppContext) {
   });
 
   // Approving a lesson: the owner's own words (edited or as proposed) go to that agent from its next turn.
+  // No test needed: testing a fix first is the owner's choice, never a gate.
   app.post("/issues/:id/lesson", async (c) => {
     if (!(c.req.header("content-type") ?? "").includes("application/json")) return c.json({ error: "Send JSON" }, 415);
     const projectId = c.get("projectId");
@@ -702,20 +652,13 @@ export function apiRoutes(ctx: AppContext) {
     const issue = await findIssue(projectId, c.req.param("id"));
     if (!issue) return c.json({ error: "That problem isn't in the Inbox anymore." }, 404);
     if (!LESSON_HARNESSES.has(issue.harness)) return c.json({ error: `Lucid can't apply lessons in ${issue.harness} yet. Copy it into the agent's instructions instead.` }, 409);
-    if (!(await tester.passed(projectId, issue.id, text))) return c.json({ error: UNTESTED }, 409);
     return c.json({ lesson: await applyLesson(db, projectId, { issueId: issue.id, harness: issue.harness, text }) }, 201);
   });
 
   app.post("/lessons/:id/:status{on|off}", async (c) => {
     if (!(c.req.header("content-type") ?? "").includes("application/json")) return c.json({ error: "Send JSON" }, 415);
     const projectId = c.get("projectId");
-    const on = c.req.param("status") === "on";
-    if (on) {
-      // Back on is the same as applying it: only with a passed test of these words.
-      const [row] = await db.select({ issueId: lessons.issueId, text: lessons.text }).from(lessons).where(and(eq(lessons.projectId, projectId), eq(lessons.id, c.req.param("id"))));
-      if (row?.issueId && !(await tester.passed(projectId, row.issueId, row.text))) return c.json({ error: UNTESTED }, 409);
-    }
-    const lesson = await setLessonStatus(db, projectId, c.req.param("id"), on ? "active" : "off");
+    const lesson = await setLessonStatus(db, projectId, c.req.param("id"), c.req.param("status") === "on" ? "active" : "off");
     return lesson ? c.json({ lesson }) : c.json({ error: "No such lesson" }, 404);
   });
 

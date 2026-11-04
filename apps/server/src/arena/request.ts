@@ -118,43 +118,133 @@ type StepLike = {
   attrs: StepAttrs | null;
 };
 
+/** The step's captured messages, or null when they weren't sent. */
+async function capturedMessages(step: StepLike, loadBlob: (key: string) => Promise<string | null>) {
+  const input = step.inputHash ? parse(await loadBlob(step.inputHash)) : undefined;
+  const raw = Array.isArray(input) ? input : isRecord(input) && Array.isArray(input.messages) ? input.messages : null;
+  return raw?.length ? raw : null;
+}
+
+/** The step's captured tool definitions: the list, "cut" when an older plugin cut them short, or null when none were sent. */
+async function capturedTools(step: StepLike, loadBlob: (key: string) => Promise<string | null>) {
+  const toolsRef = step.attrs?.toolsRef;
+  if (!toolsRef) return null;
+  const content = await loadBlob(toolsRef);
+  if (content && TRUNCATION_MARKER.test(content)) return "cut" as const;
+  const stored = parse(content);
+  return Array.isArray(stored) && stored.length ? toChatTools(stored) : null;
+}
+
+function paramsOf(step: StepLike) {
+  const params = step.attrs?.requestParams ?? {};
+  const maxTokens = typeof params.max_tokens === "number" ? Math.min(params.max_tokens, 8192) : 4096;
+  const temperature = typeof params.temperature === "number" ? params.temperature : undefined;
+  return { maxTokens, temperature };
+}
+
 /**
  * `loadBlob` returns stored content by key. Returns the request or a reason
- * phrased for the person who clicked "Try this decision".
+ * phrased for the person who clicked "Try this decision"; `missing` says
+ * what wasn't captured, for callers that can make do (rebuiltRequest).
  */
 export async function decisionRequest(
   step: StepLike,
   loadBlob: (key: string) => Promise<string | null>,
-): Promise<{ ok: true; request: DecisionRequest } | { ok: false; reason: string }> {
+): Promise<{ ok: true; request: DecisionRequest } | { ok: false; reason: string; missing?: "messages" | "tools" }> {
   if (step.kind !== "llm") return { ok: false, reason: "Only model calls can be replayed." };
-  const input = step.inputHash ? parse(await loadBlob(step.inputHash)) : undefined;
-  const raw = Array.isArray(input) ? input : isRecord(input) && Array.isArray(input.messages) ? input.messages : null;
-  if (!raw?.length) {
-    return { ok: false, reason: "The messages sent to the model weren't captured for this call, so it can't be replayed. (Claude Code session files don't include them yet; Hermes and OpenTelemetry with content capture do.)" };
+  const raw = await capturedMessages(step, loadBlob);
+  if (!raw) {
+    return {
+      ok: false,
+      missing: "messages",
+      reason: "The messages sent to the model weren't captured for this call, so it can't be replayed. (Claude Code session files don't include them yet; Hermes and OpenTelemetry with content capture do.)",
+    };
   }
   const messages = toChatMessages(raw);
   if (!messages.some((m) => m.role === "user")) return { ok: false, reason: "The captured request has no user message to replay." };
 
-  let tools: unknown[] = [];
-  const toolsRef = step.attrs?.toolsRef;
-  if (toolsRef) {
-    const content = await loadBlob(toolsRef);
-    // Early versions of the Hermes plugin cut deep schemas short; providers
-    // that validate schemas (Anthropic) reject those, and the rest would
-    // replay a different tool set than the agent had.
-    if (content && TRUNCATION_MARKER.test(content)) {
-      return { ok: false, reason: "The tool definitions for this call were cut short when captured (an older Lucid plugin did this), so a replay wouldn't be faithful. Calls captured with the current plugin can be replayed." };
+  const tools = await capturedTools(step, loadBlob);
+  // Early versions of the Hermes plugin cut deep schemas short; providers
+  // that validate schemas (Anthropic) reject those, and the rest would
+  // replay a different tool set than the agent had.
+  if (tools === "cut") {
+    return {
+      ok: false,
+      missing: "tools",
+      reason: "The tool definitions for this call were cut short when captured (an older Lucid plugin did this), so a replay wouldn't be faithful. Calls captured with the current plugin can be replayed.",
+    };
+  }
+  if (!tools && (step.attrs?.availableTools?.length ?? 0) > 0) {
+    return {
+      ok: false,
+      missing: "tools",
+      reason: "The tool definitions for this call weren't captured, and replaying without them would change the decision. New calls captured from now on include them.",
+    };
+  }
+  return { ok: true, request: { messages, tools: tools ?? [], params: paramsOf(step) } };
+}
+
+/** Tools known only by name: open parameters, so the model can still call them as the agent did. */
+export function looseTools(names: string[]): unknown[] {
+  return [...new Set(names)].map((name) => ({
+    type: "function",
+    function: { name, description: "One of the agent's tools (its definition wasn't recorded).", parameters: { type: "object", properties: {}, additionalProperties: true } },
+  }));
+}
+
+/**
+ * Keeps tool calls and their results paired as providers require: a call
+ * whose results don't all follow it, or a result with no call, becomes plain
+ * text. Rebuilt chats can have either (a call id that wasn't recorded).
+ */
+export function pairToolCalls(messages: ChatMessage[]): ChatMessage[] {
+  const out: ChatMessage[] = [];
+  const asResult = (message: ChatMessage): ChatMessage => ({ role: "user", content: `[tool result] ${textOf(message.content)}` });
+  for (let i = 0; i < messages.length; i++) {
+    const message = messages[i]!;
+    if (message.role === "tool") {
+      out.push(asResult(message));
+      continue;
     }
-    const stored = parse(content);
-    if (Array.isArray(stored)) tools = toChatTools(stored);
+    if (message.role !== "assistant" || !message.tool_calls?.length) {
+      out.push(message);
+      continue;
+    }
+    const results: ChatMessage[] = [];
+    while (messages[i + 1]?.role === "tool") results.push(messages[++i]!);
+    const ids = new Set(message.tool_calls.map((call) => call.id));
+    if (results.length === ids.size && results.every((result) => result.tool_call_id && ids.has(result.tool_call_id))) {
+      out.push(message, ...results);
+      continue;
+    }
+    const calls = message.tool_calls.map((call) => `Called ${call.function.name}(${clip(call.function.arguments, 2000)})`);
+    out.push({ role: "assistant", content: [textOf(message.content), ...calls].filter(Boolean).join("\n") }, ...results.map(asResult));
   }
-  if (!tools.length && (step.attrs?.availableTools?.length ?? 0) > 0) {
-    return { ok: false, reason: "The tool definitions for this call weren't captured, and replaying without them would change the decision. New calls captured from now on include them." };
-  }
-  const params = step.attrs?.requestParams ?? {};
-  const maxTokens = typeof params.max_tokens === "number" ? Math.min(params.max_tokens, 8192) : 4096;
-  const temperature = typeof params.temperature === "number" ? params.temperature : undefined;
-  return { ok: true, request: { messages, tools, params: { maxTokens, temperature } } };
+  return out;
+}
+
+/**
+ * A stand-in for a decision whose exact request wasn't captured, for fix
+ * tests: the messages as captured or else `rebuilt` from the recorded chat
+ * (without the agent's own instructions), and the tools as captured or else
+ * by name (`toolNames`, plus the ones the step was offered and the chat
+ * called). Null when there's no task to replay.
+ */
+export async function rebuiltRequest(
+  step: StepLike,
+  loadBlob: (key: string) => Promise<string | null>,
+  rebuilt: unknown[] | null | undefined,
+  toolNames: string[],
+): Promise<DecisionRequest | null> {
+  if (step.kind !== "llm") return null;
+  const raw = (await capturedMessages(step, loadBlob)) ?? (rebuilt?.length ? rebuilt : null);
+  if (!raw) return null;
+  const messages = pairToolCalls(toChatMessages(raw));
+  if (!messages.some((m) => m.role === "user" && !textOf(m.content).startsWith("[tool result]"))) return null;
+  const captured = await capturedTools(step, loadBlob);
+  const called = messages.flatMap((m) => m.tool_calls?.map((call) => call.function.name) ?? []);
+  const tools = Array.isArray(captured) ? captured : looseTools([...(step.attrs?.availableTools ?? []), ...toolNames, ...called]);
+  return { messages, tools, params: paramsOf(step) };
 }
 
 /** Applies a variant's prompt change to the system message. */

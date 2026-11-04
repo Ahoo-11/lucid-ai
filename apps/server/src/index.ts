@@ -3,7 +3,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { serve } from "@hono/node-server";
 import { count } from "drizzle-orm";
-import { aiFromEnv } from "./ai";
+import { aiFromEnv, providerLabel } from "./ai";
 import { createApp } from "./app";
 import { clerkAuth } from "./clerk";
 import { openDb, schema } from "./db";
@@ -45,13 +45,13 @@ const clerk = !localMode && clerkSecret && clerkPublishable ? clerkAuth({ secret
 if (!localMode && !clerk && (clerkSecret || clerkPublishable)) console.warn("Clerk: set both CLERK_SECRET_KEY and CLERK_PUBLISHABLE_KEY; using email + password sign-in.");
 
 const live = new LiveHub();
-// Inbox diagnoses, Arena replays and the judge use your own key: Meta's Muse
-// Spark on Baseten (BASETEN_API_KEY), or OpenRouter (one key, every model).
+// Inbox diagnoses, fix tests, Arena replays and the judge use your own key:
+// Meta's Muse Spark (META_API_KEY, or BASETEN_API_KEY), or OpenRouter (one key, every model).
 const ai = aiFromEnv(userEnv);
 console.info(
   ai
-    ? `AI: ${ai.info.provider === "baseten" ? `Baseten, ${ai.info.model}` : "OpenRouter"} for Inbox diagnoses and the Arena.`
-    : "AI: no BASETEN_API_KEY or OPENROUTER_API_KEY set, so Inbox diagnoses and Arena replays are off.",
+    ? `AI: ${providerLabel(ai.info.provider)}${ai.info.model ? `, ${ai.info.model}` : ""}, for Inbox diagnoses and the Arena.`
+    : "AI: no META_API_KEY, BASETEN_API_KEY or OPENROUTER_API_KEY set, so Inbox diagnoses and Arena replays are off. See .env.example.",
 );
 const ctx = { db, live, localMode, signups, defaultProjectId: projectId, log: console, chat: ai?.chat, ai: ai?.info, clerk };
 console.info(

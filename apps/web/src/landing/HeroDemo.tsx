@@ -1,11 +1,12 @@
-// The hero's sample run, played on a loop: steps stream in, two edits fail,
-// the Inbox groups the failure with a fix, the run recovers, and Arena
-// replays a decision blind. The wording follows what Lucid itself shows.
+// The hero's sample run, played on a loop from when it scrolls into view:
+// steps stream in, two edits fail, the Inbox groups the failure with a fix,
+// the run recovers, and Arena replays a decision blind. The wording follows
+// what Lucid itself shows.
 
 import { AlertTriangle, CheckCircle2, FlaskConical, Lightbulb, Sparkles, Wrench } from "lucide-react";
-import type { ReactNode } from "react";
+import { type ReactNode, useRef } from "react";
 import { cx } from "../ui";
-import { useClock } from "./clock";
+import { useClockInView } from "./clock";
 import { BRANDS, BrandMark } from "./logos";
 
 const LOOP = 15;
@@ -41,29 +42,59 @@ function Appear({ show, className, children }: { show: boolean; className?: stri
   );
 }
 
+/** A product screen's window controls, as on the landing page's other screens. */
+export function WindowDots() {
+  return (
+    <div className="flex shrink-0 gap-1.5">
+      <span className="size-2.5 rounded-full bg-zinc-700" />
+      <span className="size-2.5 rounded-full bg-zinc-700" />
+      <span className="size-2.5 rounded-full bg-zinc-700" />
+    </div>
+  );
+}
+
+/** A card's place, outlined until the card arrives, so the panel reads as waiting rather than empty. */
+function Slot({ show, label, className, children }: { show: boolean; label: string; className?: string; children: ReactNode }) {
+  return (
+    <div className={cx("relative", className)}>
+      <div
+        className={cx(
+          "absolute inset-0 rounded-xl border border-dashed border-white/10 p-4 text-[11px] font-medium text-zinc-600 transition-opacity duration-500 motion-reduce:transition-none",
+          show ? "opacity-0" : "opacity-100",
+        )}
+      >
+        {label}
+      </div>
+      <Appear show={show}>{children}</Appear>
+    </div>
+  );
+}
+
 const minutes = (s: number) => (s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`);
 
 export function HeroDemo() {
-  const t = useClock(100, 12) % LOOP;
+  const ref = useRef<HTMLDivElement>(null);
+  const t = useClockInView(ref, 100, 12) % LOOP;
   const progress = Math.min(t, DONE) / DONE;
   const done = t >= DONE;
   return (
-    <div role="img" aria-label="A sample run in Lucid: two failed edits are grouped in the Inbox with a suggested fix, then Arena finds a cheaper model that makes the same decision." className="relative">
-      <div aria-hidden className="pointer-events-none absolute -inset-x-10 -top-10 bottom-0 rounded-[3rem] bg-brand-300/[0.07] blur-3xl" />
+    <div
+      ref={ref}
+      role="img"
+      aria-label="A sample run in Lucid: two failed edits are grouped in the Inbox with a suggested fix, then Arena finds a cheaper model that makes the same decision."
+      className="relative"
+    >
       <div aria-hidden className="relative rounded-2xl bg-zinc-900 p-1.5 shadow-xl shadow-zinc-900/15 ring-1 ring-zinc-900">
         <div className="flex items-center gap-3 px-3 py-2">
-          <div className="flex gap-1.5">
-            <span className="size-2.5 rounded-full bg-zinc-700" />
-            <span className="size-2.5 rounded-full bg-zinc-700" />
-            <span className="size-2.5 rounded-full bg-zinc-700" />
-          </div>
+          <WindowDots />
+          {/* The app's own tabs. */}
           <div className="hidden items-center gap-1 text-xs sm:flex">
             <span className="flex items-center gap-1.5 rounded-md px-2 py-1 text-zinc-500">
               Inbox
               <span className={cx("rounded-full bg-rose-500 px-1.5 text-[10px] font-semibold leading-4 text-white transition-opacity", t >= INBOX ? "opacity-100" : "opacity-0")}>1</span>
             </span>
-            <span className="rounded-md bg-white/10 px-2 py-1 text-zinc-100">Runs</span>
-            <span className="rounded-md px-2 py-1 text-zinc-500">Arena</span>
+            <span className="rounded-md bg-white/10 px-2 py-1 text-zinc-100">Sessions</span>
+            <span className="rounded-md px-2 py-1 text-zinc-500">Usage</span>
             <span className="rounded-md px-2 py-1 text-zinc-500">Connect</span>
           </div>
           <div className="ml-auto flex items-center gap-1.5 text-[11px] text-zinc-500">
@@ -107,7 +138,7 @@ export function HeroDemo() {
           </div>
 
           <div className="grid grid-cols-1 content-start gap-1.5">
-            <Appear show={t >= INBOX}>
+            <Slot show={t >= INBOX} label="Inbox">
               <div className="rounded-xl bg-zinc-950 p-4 ring-1 ring-rose-500/25">
                 <div className="flex items-center justify-between gap-2 text-[11px] font-medium">
                   <span className="flex items-center gap-1.5 text-rose-300">
@@ -119,8 +150,8 @@ export function HeroDemo() {
                 <div className="mt-2 text-sm font-medium text-white">Claude Code edited a file it hadn't read</div>
                 <p className="mt-1 text-xs leading-relaxed text-zinc-400">The harness refuses edits to files the agent hasn't opened, so each try is a wasted model call.</p>
               </div>
-            </Appear>
-            <Appear show={t >= FIX}>
+            </Slot>
+            <Slot show={t >= FIX} label="Suggested fix">
               <div className="rounded-xl bg-brand-300/[0.06] p-4 ring-1 ring-brand-300/25">
                 <div className="flex items-center gap-1.5 text-[11px] font-medium text-brand-300">
                   <Lightbulb className="size-3.5" />
@@ -131,8 +162,9 @@ export function HeroDemo() {
                 </p>
                 <div className="mt-2 rounded-lg bg-zinc-950 px-3 py-2 font-mono text-xs text-brand-200 ring-1 ring-white/5">Read a file before you edit it.</div>
               </div>
-            </Appear>
-            <Appear show={t >= ARENA}>
+            </Slot>
+            {/* A phone has the run and its fix; Arena gets its own section further down. */}
+            <Slot show={t >= ARENA} label="Arena" className="hidden sm:block">
               <div className="rounded-xl bg-zinc-950 p-4 ring-1 ring-white/10">
                 <div className="flex items-center gap-1.5 text-[11px] font-medium text-zinc-400">
                   <FlaskConical className="size-3.5 text-brand-300" />
@@ -160,7 +192,7 @@ export function HeroDemo() {
                   Same fix from Haiku, for a third of the cost.
                 </Appear>
               </div>
-            </Appear>
+            </Slot>
           </div>
         </div>
       </div>

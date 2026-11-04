@@ -177,7 +177,10 @@ function UsageView() {
  * Up or down since the period before ("↑ 23%"). Plain ink, not red or green:
  * more tokens can be more work done, not a problem.
  */
-function Change({ now, before, days, show }: { now: number; before: number; days: number; show: (n: number) => string }) {
+/** `now` and `before` can be null: the server's sums over no runs (a new account's first days). */
+function Change({ now: current, before: prior, days, show }: { now: number | null; before: number | null; days: number; show: (n: number) => string }) {
+  const now = current ?? 0;
+  const before = prior ?? 0;
   if (!now && !before) return null;
   const span = days === 1 ? "24 hours" : `${days} days`;
   const title = `The ${span} before: ${show(before)}`;

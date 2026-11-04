@@ -589,7 +589,7 @@ function ProblemPanel({ issue, model, onClose, onIgnored }: { issue: Issue; mode
   const turnedOff = latest?.from === "turned off";
   const [text, setText] = useState(proposed ?? "");
   const [copied, setCopied] = useState(false);
-  // The test of exactly these words, if there is one: Apply waits for it to pass.
+  // The test of exactly these words, if there is one. Only for information: Apply never waits for it.
   const test = issue.fixTest && sameWords(issue.fixTest.lesson, text) ? issue.fixTest : null;
   const refresh = () => void queryClient.invalidateQueries({ queryKey: ["issues"] });
   const patch = (change: Partial<Issue>) =>
@@ -612,7 +612,7 @@ function ProblemPanel({ issue, model, onClose, onIgnored }: { issue: Issue; mode
     onSettled: refresh,
   });
   const runTest = useMutation({
-    mutationFn: () => api.testFix(issue.id, text, true),
+    mutationFn: () => api.testFix(issue.id, text, false),
     onSuccess: ({ fixTest }) => patch({ fixTest }),
     onSettled: refresh,
   });
@@ -627,8 +627,8 @@ function ProblemPanel({ issue, model, onClose, onIgnored }: { issue: Issue; mode
   const copy = () => void navigator.clipboard.writeText(text).then(() => setCopied(true));
   const error = [apply, turnOff, ignore, diagnose, runTest, split].find((m) => m.isError)?.error;
   const errors = issue.symptoms.filter((symptom) => symptom.problem === "error").length;
-  // A fix not yet passed is tested first, and the server applies it when it passes.
-  const testFirst = !issue.ignored && !active && !!proposed && issue.lessonsApply && test?.status !== "passed" && test?.status !== "untestable";
+  // Apply sends the fix to the agent at once, tested or not. Testing it on past runs first is optional.
+  const applies = !issue.ignored && !active && !!proposed && issue.lessonsApply;
 
   const primary = issue.ignored ? (
     <button type="button" onClick={() => ignore.mutate(false)} disabled={ignore.isPending} className={SECONDARY}>
@@ -639,20 +639,10 @@ function ProblemPanel({ issue, model, onClose, onIgnored }: { issue: Issue; mode
       {turnOff.isPending && <Loader2 className="size-3.5 animate-spin" />}
       Turn off fix
     </button>
-  ) : proposed && issue.lessonsApply && test?.status === "passed" ? (
-    <button type="button" onClick={() => apply.mutate()} disabled={apply.isPending} className={PRIMARY}>
+  ) : applies ? (
+    <button type="button" onClick={() => apply.mutate()} disabled={apply.isPending || !text.trim()} className={PRIMARY}>
       {apply.isPending && <Loader2 className="size-3.5 animate-spin" />}
       {turnedOff ? `Apply to ${agent} again` : `Apply fix to ${agent}`}
-    </button>
-  ) : proposed && issue.lessonsApply && test?.status === "untestable" ? (
-    <button type="button" onClick={copy} className={SECONDARY} title="It couldn't be tested, so Lucid won't apply it. You can still add it yourself.">
-      <Copy className="size-3.5" />
-      {copied ? "Copied" : "Copy fix"}
-    </button>
-  ) : testFirst ? (
-    <button type="button" onClick={() => runTest.mutate()} disabled={testing || !text.trim() || !model} className={PRIMARY}>
-      {testing ? <Loader2 className="size-3.5 animate-spin" /> : <FlaskConical className="size-3.5" />}
-      {testing ? "Testing…" : "Test & Apply Fix"}
     </button>
   ) : proposed ? (
     <button type="button" onClick={copy} disabled={!text.trim()} className={PRIMARY}>
@@ -734,7 +724,7 @@ function ProblemPanel({ issue, model, onClose, onIgnored }: { issue: Issue; mode
                 {proposed && (
                   <Change agent={agent} text={text} onChange={setText} turnedOff={turnedOff} locked={testing}>
                     {issue.lessonsApply ? (
-                      <TestStatus test={test} edited={!!issue.fixTest && !test} running={testing} model={model} agent={agent} />
+                      <TestStatus test={test} running={testing} model={model} agent={agent} />
                     ) : (
                       <p>Paste it into {agent}'s instructions. Lucid can't apply or test it there by itself yet.</p>
                     )}
@@ -766,6 +756,18 @@ function ProblemPanel({ issue, model, onClose, onIgnored }: { issue: Issue; mode
         {error && <p className="mb-2 text-xs text-rose-600 dark:text-rose-400">{error.message}</p>}
         <div className="flex items-center gap-2">
           {primary}
+          {applies && model && (
+            <button
+              type="button"
+              onClick={() => runTest.mutate()}
+              disabled={testing || !text.trim()}
+              className={QUIET}
+              title={`Optional: ${modelLabel(model)} replays up to 3 past runs with this fix and says how it did. Apply works either way.`}
+            >
+              {testing ? <Loader2 className="size-4 animate-spin" /> : <FlaskConical className="size-4" />}
+              {testing ? "Testing…" : "Test first"}
+            </button>
+          )}
           {!issue.ignored && !active && (
             <button type="button" onClick={() => ignore.mutate(true)} disabled={ignore.isPending} className={cx(QUIET, "ml-auto")} title="Take it out of the Inbox. It won't be diagnosed by itself.">
               <EyeOff className="size-4" />
@@ -773,7 +775,7 @@ function ProblemPanel({ issue, model, onClose, onIgnored }: { issue: Issue; mode
             </button>
           )}
         </div>
-        {testFirst && <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">The fix is only applied if testing succeeds.</p>}
+        {applies && <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">{agent} gets it on its next turn. You can turn it off any time.</p>}
       </div>
     </div>
   );
@@ -928,37 +930,30 @@ function Change({
 /** The same fix, give or take spaces: what the server compares a test with. */
 const sameWords = (a: string, b: string) => a.replace(/\s+/g, " ").trim() === b.replace(/\s+/g, " ").trim();
 
-/** Where the fix stands: untested, being tested, or how it did on past runs, run by run. */
-function TestStatus({ test, edited, running, model, agent }: { test: FixTest | null; edited: boolean; running: boolean; model: string | null; agent: string }) {
+/** How an optional test of the fix did, if one ran: being tested, or how it did on past runs, run by run. Nothing before a test. */
+function TestStatus({ test, running, model, agent }: { test: FixTest | null; running: boolean; model: string | null; agent: string }) {
   const [open, setOpen] = useState(false);
-  if (!model) return <p>Testing a fix needs a model key (BASETEN_API_KEY) on the Lucid server; until then it can't be applied.</p>;
+  if (!model) return null;
   if (running) {
     return (
       <p className="flex items-center gap-1.5 text-zinc-600 dark:text-zinc-300">
         <Loader2 className="size-3.5 shrink-0 animate-spin" />
-        {modelLabel(model)} is replaying up to 3 past runs with this fix. This takes a minute or two.
+        {modelLabel(model)} is replaying up to 3 past runs with this fix. You can apply it now or wait for the result.
       </p>
     );
   }
-  if (!test || test.status === "running") {
-    return (
-      <p className="flex items-start gap-1.5">
-        <FlaskConical className="mt-px size-3.5 shrink-0" />
-        {edited ? "You changed the fix since its test. Test it again before it goes to " : "Not tested yet. Every fix is tested on past runs before it goes to "}
-        {agent}.
-      </p>
-    );
-  }
+  if (!test || test.status === "running") return null;
   if (test.status === "untestable" || test.status === "error") {
     return (
-      <p className="flex items-start gap-1.5 text-amber-700 dark:text-amber-400">
+      <p className="flex items-start gap-1.5 text-zinc-500 dark:text-zinc-400">
         <TriangleAlert className="mt-px size-3.5 shrink-0" />
-        {test.status === "untestable" ? `Can't be tested, so Lucid won't apply it: ${test.reason}` : `The test didn't finish: ${test.reason}`}
+        {test.status === "untestable" ? `Couldn't be tested: ${test.reason}` : `The test didn't finish: ${test.reason}`} Applying it works either way.
       </p>
     );
   }
   const passed = test.results.filter((result) => result.pass).length;
   const total = test.results.length;
+  const rebuilt = test.results.filter((result) => result.rebuilt).length;
   const cost = costLine({ inputTokens: test.inputTokens, outputTokens: test.outputTokens, latencyMs: test.latencyMs });
   return (
     <div className="space-y-1.5">
@@ -973,8 +968,7 @@ function TestStatus({ test, edited, running, model, agent }: { test: FixTest | n
       </p>
       {test.revisedFrom && (
         <p>
-          {modelLabel(test.model)} rewrote the fix after the first version failed, then tested it again.
-          {test.status === "passed" && " Since the words changed, Lucid didn't apply it by itself: read them, then apply."}
+          {modelLabel(test.model)} rewrote the fix after the first version failed, then tested it again. Apply sends the words in the box.
         </p>
       )}
       {test.standIn && (
@@ -982,7 +976,12 @@ function TestStatus({ test, edited, running, model, agent }: { test: FixTest | n
           Replayed with {modelLabel(test.model)} standing in for {test.standIn}, the model {agent} uses.
         </p>
       )}
-      {test.status === "passed" && <p>{agent} follows it from its next turn once applied. You can turn it off any time.</p>}
+      {rebuilt > 0 && (
+        <p>
+          {rebuilt === total ? "These runs" : `${plural(rebuilt, "run")} of these`} didn't keep {agent}'s full request, so Lucid rebuilt it from the conversation. {agent}'s own
+          instructions weren't in it, so the test is close, not exact.
+        </p>
+      )}
       {open && (
         <ul className="space-y-2 rounded-lg bg-zinc-50 p-3 dark:bg-white/[0.03]">
           {test.results.map((result) => (

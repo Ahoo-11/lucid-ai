@@ -6,6 +6,7 @@
 
 import { useEffect, useRef } from "react";
 import { type Theme, useTheme } from "./theme";
+import { cx } from "./ui";
 
 /** Lightest to densest; a space leaves the cell empty. */
 const RAMP = " .:-=+*#";
@@ -76,8 +77,12 @@ function atlas(theme: Theme, cw: number, ch: number, dpr: number) {
   return canvas;
 }
 
-/** `theme`: for a page with its own colours (the landing page is always white); otherwise it follows the app. */
-export function AsciiField({ theme: fixed }: { theme?: Theme }) {
+/**
+ * `theme`: for a page with its own colours (the landing page is always white); otherwise it follows the app.
+ * `scrolls`: the field belongs to the top of the page and scrolls away with it, rather than staying behind
+ * every section (the landing page, where section titles would otherwise sit in it).
+ */
+export function AsciiField({ theme: fixed, scrolls }: { theme?: Theme; scrolls?: boolean }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const current = useTheme();
   const theme = fixed ?? current;
@@ -159,7 +164,7 @@ export function AsciiField({ theme: fixed }: { theme?: Theme }) {
     };
   }, [theme]);
 
-  return <canvas ref={ref} aria-hidden className="pointer-events-none fixed inset-0 -z-10 size-full" />;
+  return <canvas ref={ref} aria-hidden className={cx("pointer-events-none -z-10", scrolls ? "absolute inset-x-0 top-0 h-svh w-full" : "fixed inset-0 size-full")} />;
 }
 
 /** For pictures: a slightly heavier ramp, so dark and saturated parts read as dense type. */

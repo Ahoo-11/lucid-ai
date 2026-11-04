@@ -3,7 +3,8 @@ import { MUSE_SPARK } from "../src/ai";
 import { createApp } from "../src/app";
 import type { AppContext } from "../src/context";
 import { openDb } from "../src/db";
-import type { ChatClient, ChatMessage, ChatRequest } from "../src/ee/arena/llm";
+import type { ChatClient, ChatMessage, ChatRequest } from "../src/arena/llm";
+import { pairToolCalls } from "../src/arena/request";
 import { LESSONS_HEADER, withLesson } from "../src/fixtest";
 import { ensureDefaultProject } from "../src/keys";
 import { LiveHub } from "../src/live";
@@ -54,11 +55,11 @@ async function setup(chat: ChatClient | undefined) {
     const response = await app.request(path, { method, headers: { "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
     return { status: response.status, body: (await response.json().catch(() => null)) as Record<string, unknown> };
   };
-  /** A Hermes cron turn on kimi-k2 that ran execute_code and was blocked; replayable when the plugin sent the request. */
-  const blockedTurn = (turn: string, ts: number, captured = true) =>
+  /** A Hermes cron turn on kimi-k2 that ran execute_code and was blocked; replayed exactly when the plugin sent the request. */
+  const blockedTurn = (turn: string, ts: number, captured = true, task = "[cron] Check the repo") =>
     call("POST", "/v1/hooks/hermes", {
       events: [
-        { hook: "pre_llm_call", ts, session_id: `cron-${turn}`, turn_id: turn, user_message: "[cron] Check the repo" },
+        { hook: "pre_llm_call", ts, session_id: `cron-${turn}`, turn_id: turn, user_message: task },
         {
           hook: "pre_api_request",
           ts,
@@ -137,8 +138,8 @@ describe("testing a fix before it reaches the agent", () => {
     expect(judged).toContain("execute_code");
     expect(judged).toContain('Calls execute_code({"code":"import subprocess"})');
 
-    // Only the words that passed can be applied.
-    expect((await call("POST", `/api/issues/${id}/lesson`, { text: `${fix} Always.` })).status).toBe(409);
+    // Applying never waits for a test: other words go too.
+    expect((await call("POST", `/api/issues/${id}/lesson`, { text: `${fix} Always.` })).status).toBe(201);
     expect((await call("POST", `/api/issues/${id}/lesson`, { text: fix })).status).toBe(201);
   });
 
@@ -154,7 +155,6 @@ describe("testing a fix before it reaches the agent", () => {
     // Two rounds of two replays, each judged, and one rewrite.
     expect(asked.filter((r) => !r.json)).toHaveLength(4);
     expect(asked.filter((r) => String(r.messages[0]?.content).startsWith("You improve"))).toHaveLength(1);
-    expect((await call("POST", `/api/issues/${id}/lesson`, { text: "Be careful with code." })).status).toBe(409);
     expect((await call("POST", `/api/issues/${id}/lesson`, { text: result.lesson })).status).toBe(201);
   });
 
@@ -211,19 +211,57 @@ describe("testing a fix before it reaches the agent", () => {
     expect(result.results!.map((r) => r.reason)).toEqual(["It still ran execute_code.", "It still ran execute_code."]);
   });
 
-  it("says when nothing can be replayed, and needs a model key", async () => {
-    const { call, blockedTurn, issue, test } = await setup(fakeModel([]));
+  it("rebuilds a request that wasn't captured from the recorded chat, with the tools by name", async () => {
+    const asked: ChatRequest[] = [];
+    const { blockedTurn, issue, test } = await setup(fakeModel(asked));
+    // As Hermes sends a request past its hook size limit: no body, no tool schemas, only their names.
     await blockedTurn("t1", Date.now() / 1000 - 600, false);
     await blockedTurn("t2", Date.now() / 1000 - 300, false);
+    const fix = "When running as a cron job, use the terminal tool, never execute_code.";
+    const result = await test((await issue()).id, fix);
+    expect(result).toMatchObject({ status: "passed", lesson: fix });
+    expect(result.results!.every((r) => (r as { rebuilt?: boolean }).rebuilt)).toBe(true);
+
+    const replay = asked.find((r) => !r.json)!;
+    expect(replay.messages).toEqual([{ role: "user", content: `[cron] Check the repo\n\n${LESSONS_HEADER}\n- ${fix}` }]);
+    expect((replay.tools as { function: { name: string } }[]).map((tool) => tool.function.name).sort()).toEqual(["execute_code", "terminal"]);
+  });
+
+  it("says when nothing can be replayed, and needs a model key", async () => {
+    const { call, blockedTurn, issue, test } = await setup(fakeModel([]));
+    // No request captured and no task recorded: nothing to rebuild either.
+    await blockedTurn("t1", Date.now() / 1000 - 600, false, "");
+    await blockedTurn("t2", Date.now() / 1000 - 300, false, "");
     const { id } = await issue();
     const result = await test(id, "Use the terminal tool.");
     expect(result).toMatchObject({ status: "untestable" });
     expect(result.reason).toMatch(/weren't captured/);
-    expect((await call("POST", `/api/issues/${id}/lesson`, { text: "Use the terminal tool." })).status).toBe(409);
+    // Applying works anyway.
+    expect((await call("POST", `/api/issues/${id}/lesson`, { text: "Use the terminal tool." })).status).toBe(201);
 
     const off = await setup(undefined);
     await off.blockedTurn("t1", Date.now() / 1000 - 600);
     expect((await off.call("POST", `/api/issues/${(await off.issue()).id}/test`, { text: "x" })).status).toBe(409);
+  });
+
+  it("keeps rebuilt tool calls paired with their results, or makes them text", () => {
+    const call = (id: string) => ({ id, type: "function" as const, function: { name: "terminal", arguments: '{"command":"ls"}' } });
+    const paired = pairToolCalls([
+      { role: "user", content: "Check the repo" },
+      { role: "assistant", content: null, tool_calls: [call("a")] },
+      { role: "tool", content: "ok", tool_call_id: "a" },
+      { role: "assistant", content: "", tool_calls: [call("b")] },
+      { role: "tool", content: "done", tool_call_id: "x" },
+      { role: "tool", content: "stray", tool_call_id: "y" },
+    ]);
+    expect(paired).toEqual([
+      { role: "user", content: "Check the repo" },
+      { role: "assistant", content: null, tool_calls: [call("a")] },
+      { role: "tool", content: "ok", tool_call_id: "a" },
+      { role: "assistant", content: 'Called terminal({"command":"ls"})' },
+      { role: "user", content: "[tool result] done" },
+      { role: "user", content: "[tool result] stray" },
+    ]);
   });
 
   it("adds the fix to a lessons block that's already in the turn, first", () => {

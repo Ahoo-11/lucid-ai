@@ -1,7 +1,7 @@
 import type { AiInfo } from "./ai";
 import type { ClerkAuth } from "./clerk";
 import type { Db } from "./db";
-import type { ChatClient } from "./ee/arena/llm";
+import type { ChatClient } from "./arena/llm";
 import type { LiveHub } from "./live";
 
 export type AppContext = {

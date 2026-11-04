@@ -5,7 +5,9 @@ dist/
 *.log
 .env
 .env.*
+!.env.example
 coverage/
+video/
 __pycache__/
 # Machine-specific dev server configs (absolute paths)
 .claude/

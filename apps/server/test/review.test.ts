@@ -3,7 +3,7 @@ import { MUSE_SPARK } from "../src/ai";
 import { createApp } from "../src/app";
 import type { AppContext } from "../src/context";
 import { openDb, schema } from "../src/db";
-import type { ChatClient, ChatRequest } from "../src/ee/arena/llm";
+import type { ChatClient, ChatRequest } from "../src/arena/llm";
 import { ensureDefaultProject } from "../src/keys";
 import { LiveHub } from "../src/live";
 import { CHECKS_PER_DAY } from "../src/review";

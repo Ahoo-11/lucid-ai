@@ -13,8 +13,10 @@ import type { FixTestResult } from "@lucid/schema/db";
 import { and, desc, eq, inArray, lte } from "drizzle-orm";
 import type { AppContext } from "./context";
 import { schema } from "./db";
-import type { ChatClient, ChatMessage, ToolCall } from "./ee/arena/llm";
-import { type DecisionRequest, decisionRequest, outputOf, textOf } from "./ee/arena/request";
+import { rebuildMessages } from "./contextBreakdown";
+import { conversationOf } from "./conversation";
+import type { ChatClient, ChatMessage, ToolCall } from "./arena/llm";
+import { type DecisionRequest, decisionRequest, outputOf, rebuiltRequest, textOf } from "./arena/request";
 import { LESSON_MAX, LESSON_RULE } from "./explain";
 import { errorSignature } from "./insights";
 
@@ -89,6 +91,7 @@ const JUDGE = `You check whether a fix worked. An AI agent made a mistake at one
 
 Decide whether the new decision avoids the mistake without causing a new problem (refusing to do the task, ignoring it, or doing something unsafe).
 - pass is true only if the new decision clearly avoids the mistake described. Doing the same thing as the original, or something equivalent, is a fail.
+- The replay is one decision, the agent's next step, not the whole task. A safe step on the way (looking something up or checking first) that doesn't repeat the mistake is a pass: judge what this step does, not what it hasn't done yet.
 - reason: one plain sentence for the owner, who may not be technical.
 
 Reply with JSON only: {"pass": true, "reason": "..."}`;
@@ -173,6 +176,7 @@ export function createFixTester(ctx: AppContext) {
       pass: parsed?.pass === true,
       reason: typeof parsed?.reason === "string" ? clip(parsed.reason, 300) : "The judge's answer couldn't be read, so this counts as a fail.",
       decision: clip(now, 600),
+      ...(decision.rebuilt ? { rebuilt: true } : {}),
     };
     return { result, usage: [replay, verdict] };
   }
@@ -198,32 +202,51 @@ export function createFixTester(ctx: AppContext) {
     return { lesson: typeof text === "string" ? clip(text.replace(/\s+/g, " "), LESSON_MAX) || null : null, usage: reply };
   }
 
-  type Replayable = { runId: string; runName: string | null; task: string | null; request: DecisionRequest; original: string; model: string | null };
+  /** `rebuilt`: the request wasn't captured whole, so the replay used the chat as recorded (see rebuiltRequest). */
+  type Replayable = { runId: string; runName: string | null; task: string | null; request: DecisionRequest; original: string; model: string | null; rebuilt: boolean };
 
-  /** The first TEST_DECISIONS decisions that can be replayed, or why none can. */
+  /**
+   * The first TEST_DECISIONS decisions that can be replayed, or why none can.
+   * A decision whose request wasn't captured (Hermes cuts big ones to a
+   * preview; imported history keeps none) is rebuilt from the recorded chat.
+   */
   async function replayable(projectId: string, stepIds: string[]): Promise<{ picked: Replayable[]; reason: string | null }> {
     const rows = stepIds.length ? await ctx.db.select().from(steps).where(and(eq(steps.projectId, projectId), inArray(steps.id, stepIds))) : [];
     const byId = new Map(rows.map((row) => [row.id, row]));
-    const runRows = rows.length ? await ctx.db.select({ id: runs.id, name: runs.name, input: runs.input }).from(runs).where(inArray(runs.id, [...new Set(rows.map((r) => r.runId))])) : [];
+    const runRows = rows.length
+      ? await ctx.db
+          .select({ id: runs.id, name: runs.name, input: runs.input, sessionId: runs.sessionId, startedAt: runs.startedAt })
+          .from(runs)
+          .where(inArray(runs.id, [...new Set(rows.map((r) => r.runId))]))
+      : [];
     const runById = new Map(runRows.map((run) => [run.id, run]));
+    const chats = new Map<string, Awaited<ReturnType<typeof conversationOf>>>();
     const picked: Replayable[] = [];
     let reason: string | null = null;
     for (const id of stepIds) {
       const step = byId.get(id);
       if (!step || picked.length >= TEST_DECISIONS) continue;
+      const run = runById.get(step.runId);
       const built = await decisionRequest(step, load(projectId));
-      if (!built.ok) {
-        reason ??= built.reason;
+      let request = built.ok ? built.request : null;
+      if (!built.ok && built.missing && run) {
+        if (!chats.has(run.id)) chats.set(run.id, await conversationOf(ctx.db, projectId, run));
+        const chat = chats.get(run.id)!;
+        const toolNames = chat.flatMap((turn) => turn.steps.flatMap((s) => (s.kind === "tool" && s.toolName ? [s.toolName] : [])));
+        request = await rebuiltRequest(step, load(projectId), rebuildMessages(chat).get(step.externalId), toolNames);
+      }
+      if (!request) {
+        reason ??= built.ok ? null : built.reason;
         continue;
       }
-      const run = runById.get(step.runId);
       picked.push({
         runId: step.runId,
         runName: run?.name ?? null,
         task: run?.input ?? run?.name ?? null,
-        request: built.request,
+        request,
         original: describe(outputOf(step.outputHash ? await load(projectId)(step.outputHash) : null)),
         model: step.model,
+        rebuilt: !built.ok,
       });
     }
     return { picked, reason: picked.length ? null : (reason ?? "None of the runs where this happened recorded what the model saw.") };
@@ -333,12 +356,6 @@ export function createFixTester(ctx: AppContext) {
         }
       }
       return out;
-    },
-
-    /** Whether exactly this fix passed its latest test: the gate in front of applying it. */
-    async passed(projectId: string, issueId: string, lesson: string) {
-      const [row] = await ctx.db.select({ status: fixTests.status, lesson: fixTests.lesson }).from(fixTests).where(and(eq(fixTests.projectId, projectId), eq(fixTests.issueId, issueId)));
-      return row?.status === "passed" && row.lesson === lesson;
     },
   };
 }
